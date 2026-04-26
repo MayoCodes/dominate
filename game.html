@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOMINATE · Campaign</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=EB+Garamond:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #C9A84C;
+    --gold-light: #E2C170;
+    --gold-dim: rgba(201,168,76,0.35);
+    --black: #000000;
+    --surface: #0e0e0e;
+    --surface-2: #161616;
+    --text: #EDE8DC;
+    --text-muted: #6B6456;
+    --red: #c94c4c;
+    --green: #4caa6e;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--black);
+    color: var(--text);
+    font-family: 'EB Garamond', Georgia, serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── GAME CANVAS ── */
+  #game-canvas {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    cursor: grab;
+    background: #000;
+  }
+  #game-canvas:active { cursor: grabbing; }
+
+  /* ── HUD TOP BAR ── */
+  #hud-top {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px;
+    height: 52px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.92) 0%, transparent 100%);
+    pointer-events: none;
+  }
+  .hud-logo {
+    font-family: 'Cinzel', serif; font-size: 14px;
+    letter-spacing: 0.3em; color: var(--gold);
+    pointer-events: auto;
+  }
+  .hud-center {
+    display: flex; align-items: center; gap: 20px;
+  }
+  .hud-pill {
+    font-family: 'Cinzel', serif; font-size: 9px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--text-muted);
+    border: 1px solid rgba(201,168,76,0.15);
+    padding: 5px 12px;
+    background: rgba(0,0,0,0.6);
+  }
+  .hud-pill span { color: var(--gold); }
+  .hud-right { display: flex; gap: 10px; pointer-events: auto; }
+
+  /* ── HUD BOTTOM BAR ── */
+  #hud-bottom {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 0 20px 16px;
+    background: linear-gradient(to top, rgba(0,0,0,0.88) 0%, transparent 100%);
+    pointer-events: none;
+  }
+
+  /* PLAYER SELF CARD */
+  .self-card {
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(201,168,76,0.2);
+    padding: 10px 16px;
+    pointer-events: auto;
+  }
+  .self-color-dot {
+    width: 10px; height: 10px;
+    border: 1px solid rgba(255,255,255,0.3);
+    flex-shrink: 0;
+  }
+  .self-name {
+    font-family: 'Cinzel', serif; font-size: 11px;
+    letter-spacing: 0.18em; color: var(--gold-light);
+  }
+  .self-stat {
+    font-family: 'EB Garamond', serif; font-size: 14px;
+    color: var(--text-muted);
+  }
+  .self-stat strong { color: var(--text); }
+
+  /* SCOREBOARD */
+  #scoreboard {
+    background: rgba(0,0,0,0.75);
+    border: 1px solid rgba(201,168,76,0.15);
+    padding: 12px 16px; min-width: 180px;
+    pointer-events: auto;
+    max-height: 220px; overflow-y: auto;
+  }
+  .scoreboard-title {
+    font-family: 'Cinzel', serif; font-size: 8px;
+    letter-spacing: 0.3em; text-transform: uppercase;
+    color: var(--text-muted); margin-bottom: 10px; display: block;
+  }
+  .score-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(201,168,76,0.06);
+  }
+  .score-row:last-child { border-bottom: none; }
+  .score-dot { width: 8px; height: 8px; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.2); }
+  .score-name { flex: 1; font-family: 'EB Garamond', serif; font-size: 14px; color: var(--text); }
+  .score-territories { font-family: 'Cinzel', serif; font-size: 9px; color: var(--text-muted); }
+
+  /* ZOOM CONTROLS */
+  #zoom-controls {
+    position: fixed; right: 20px; top: 50%; transform: translateY(-50%);
+    z-index: 100; display: flex; flex-direction: column; gap: 4px;
+    pointer-events: auto;
+  }
+  .zoom-btn {
+    width: 36px; height: 36px;
+    background: rgba(0,0,0,0.75); border: 1px solid rgba(201,168,76,0.2);
+    color: var(--gold); font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    font-family: 'Cinzel', serif;
+  }
+  .zoom-btn:hover { background: rgba(201,168,76,0.1); border-color: rgba(201,168,76,0.4); }
+
+  /* TURN INDICATOR */
+  #turn-banner {
+    position: fixed; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 100;
+    font-family: 'Cinzel', serif; font-size: 10px;
+    letter-spacing: 0.25em; text-transform: uppercase;
+    color: var(--gold); background: rgba(0,0,0,0.8);
+    border: 1px solid rgba(201,168,76,0.25);
+    padding: 7px 20px;
+    pointer-events: none;
+    opacity: 0; transition: opacity 0.4s;
+  }
+  #turn-banner.visible { opacity: 1; }
+
+  /* TOOLTIP */
+  #tooltip {
+    position: fixed; z-index: 200;
+    pointer-events: none;
+    opacity: 0; transition: opacity 0.15s;
+  }
+  #tooltip.visible { opacity: 1; }
+  .tooltip-inner {
+    background: rgba(6,6,6,0.95);
+    border: 1px solid rgba(201,168,76,0.3);
+    padding: 10px 14px;
+    position: relative;
+    min-width: 140px;
+  }
+  /* speech bubble tail */
+  .tooltip-inner::after {
+    content: '';
+    position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 7px solid rgba(201,168,76,0.3);
+  }
+  .tooltip-inner::before {
+    content: '';
+    position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 6px solid rgba(6,6,6,0.95);
+    z-index: 1;
+  }
+  .tt-nation {
+    font-family: 'Cinzel', serif; font-size: 11px;
+    letter-spacing: 0.15em; color: var(--gold-light);
+    display: block; margin-bottom: 6px;
+  }
+  .tt-row {
+    display: flex; justify-content: space-between; gap: 16px;
+    font-family: 'EB Garamond', serif; font-size: 13px;
+    color: var(--text-muted); margin-top: 2px;
+  }
+  .tt-row strong { color: var(--text); }
+  .tt-owner-dot {
+    display: inline-block; width: 7px; height: 7px;
+    border: 1px solid rgba(255,255,255,0.3);
+    margin-right: 5px; vertical-align: middle;
+  }
+
+  /* MINIMAP */
+  #minimap {
+    position: fixed; bottom: 80px; right: 20px; z-index: 100;
+    width: 160px; height: 90px;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(201,168,76,0.15);
+    overflow: hidden;
+  }
+  #minimap canvas { width: 100%; height: 100%; }
+
+  /* TOAST */
+  #toast-container {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    z-index: 999; display: flex; flex-direction: column; gap: 6px;
+    align-items: center; pointer-events: none;
+  }
+  .toast {
+    font-family: 'Cinzel', serif; font-size: 9px; letter-spacing: 0.18em;
+    text-transform: uppercase; padding: 8px 18px;
+    border: 1px solid; backdrop-filter: blur(8px);
+    animation: toastIn 0.3s ease both;
+  }
+  .toast.info    { border-color: rgba(201,168,76,0.4); color: var(--gold);  background: rgba(0,0,0,0.9); }
+  .toast.success { border-color: rgba(76,170,110,0.4); color: var(--green); background: rgba(0,0,0,0.9); }
+  .toast.error   { border-color: rgba(201,76,76,0.4);  color: var(--red);   background: rgba(0,0,0,0.9); }
+  @keyframes toastIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+
+  /* LOADING OVERLAY */
+  #loading {
+    position: fixed; inset: 0; z-index: 500;
+    background: #000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 20px;
+    transition: opacity 0.6s;
+  }
+  #loading.fade { opacity: 0; pointer-events: none; }
+  .loading-logo {
+    font-family: 'Cinzel', serif; font-size: 28px;
+    letter-spacing: 0.35em; color: var(--gold);
+  }
+  .loading-bar-wrap {
+    width: 200px; height: 1px; background: rgba(201,168,76,0.15);
+  }
+  .loading-bar {
+    height: 100%; background: var(--gold);
+    width: 0%; transition: width 0.4s ease;
+  }
+  .loading-text {
+    font-family: 'EB Garamond', serif; font-style: italic;
+    font-size: 14px; color: var(--text-muted);
+  }
+
+  /* Decorative corners on minimap */
+  #minimap::before {
+    content: ''; position: absolute; top: 0; left: 0;
+    width: 8px; height: 8px;
+    border-top: 1px solid var(--gold); border-left: 1px solid var(--gold);
+    z-index: 1;
+  }
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loading">
+  <div class="loading-logo">DOMINATE</div>
+  <div class="loading-bar-wrap"><div class="loading-bar" id="loading-bar"></div></div>
+  <div class="loading-text" id="loading-text">Loading map data…</div>
+</div>
+
+<!-- TOAST -->
+<div id="toast-container"></div>
+
+<!-- MAIN CANVAS -->
+<canvas id="game-canvas"></canvas>
+
+<!-- TOOLTIP -->
+<div id="tooltip">
+  <div class="tooltip-inner">
+    <span class="tt-nation" id="tt-nation">—</span>
+    <div class="tt-row"><span>Commander</span><strong id="tt-owner">—</strong></div>
+    <div class="tt-row"><span>Troops</span><strong id="tt-troops">—</strong></div>
+    <div class="tt-row"><span>Territories</span><strong id="tt-territories">—</strong></div>
+  </div>
+</div>
+
+<!-- HUD TOP -->
+<div id="hud-top">
+  <div class="hud-logo">DOMINATE</div>
+  <div class="hud-center">
+    <div class="hud-pill">Turn <span id="hud-turn">1</span></div>
+    <div class="hud-pill">Map · <span id="hud-map">World</span></div>
+    <div class="hud-pill"><span id="hud-players">0</span> Commanders</div>
+  </div>
+  <div class="hud-right"></div>
+</div>
+
+<!-- TURN BANNER -->
+<div id="turn-banner" id="turn-banner">Your Turn</div>
+
+<!-- HUD BOTTOM -->
+<div id="hud-bottom">
+  <div class="self-card" id="self-card">
+    <div class="self-color-dot" id="self-dot"></div>
+    <div>
+      <div class="self-name" id="self-name">Commander</div>
+      <div class="self-stat">Territories: <strong id="self-territories">0</strong> · Troops: <strong id="self-troops">0</strong></div>
+    </div>
+  </div>
+  <div id="scoreboard">
+    <span class="scoreboard-title">Commanders</span>
+    <div id="score-list"></div>
+  </div>
+</div>
+
+<!-- ZOOM -->
+<div id="zoom-controls">
+  <button class="zoom-btn" onclick="zoomIn()">+</button>
+  <button class="zoom-btn" onclick="zoomOut()">−</button>
+  <button class="zoom-btn" onclick="resetZoom()" style="font-size:11px;letter-spacing:0.05em;">⌂</button>
+</div>
+
+<!-- MINIMAP -->
+<div id="minimap"><canvas id="minimap-canvas"></canvas></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<script>
+// ══════════════════════════════════════════════════════
+//  CONFIG
+// ══════════════════════════════════════════════════════
+const SERVER_WS = 'wss://dominate-server.maiyo-studios.workers.dev';
+
+// Map sources keyed by lobby map value
+const MAP_SOURCES = {
+  world:    { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries' },
+  europe:   { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries', clip: [[-25,34],[45,72]] },
+  americas: { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries', clip: [[-170,-60],[-10,75]] },
+  asia:     { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries', clip: [[25,0],[145,75]] },
+  africa:   { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries', clip: [[-20,-40],[55,38]] },
+  pangaea:  { url: 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json',  type: 'countries', topo: 'countries' },
+};
+
+// Player palette — light, distinct colours
+const PLAYER_COLORS = [
+  '#7EC8E3','#A8E6CF','#FFD3B6','#FF8B94','#C3B1E1',
+  '#B5EAD7','#FFDAC1','#E2F0CB','#F7C5D5','#9FDBF3',
+  '#D4A5F5','#FAD02E','#F9C784','#B8E0FF','#D5F5E3',
+];
+
+// Country ID → Name lookup (subset for labelling)
+const COUNTRY_NAMES = {
+  4:'Afghanistan',8:'Albania',12:'Algeria',24:'Angola',32:'Argentina',
+  36:'Australia',40:'Austria',50:'Bangladesh',56:'Belgium',64:'Bhutan',
+  68:'Bolivia',76:'Brazil',100:'Bulgaria',116:'Cambodia',120:'Cameroon',
+  124:'Canada',144:'Sri Lanka',152:'Chile',156:'China',170:'Colombia',
+  180:'DR Congo',188:'Costa Rica',191:'Croatia',192:'Cuba',204:'Benin',
+  208:'Denmark',214:'Dominican Rep.',218:'Ecuador',818:'Egypt',222:'El Salvador',
+  231:'Ethiopia',246:'Finland',250:'France',276:'Germany',288:'Ghana',
+  300:'Greece',320:'Guatemala',324:'Guinea',332:'Haiti',340:'Honduras',
+  348:'Hungary',356:'India',360:'Indonesia',364:'Iran',368:'Iraq',
+  372:'Ireland',376:'Israel',380:'Italy',388:'Jamaica',392:'Japan',
+  400:'Jordan',398:'Kazakhstan',404:'Kenya',408:'North Korea',410:'South Korea',
+  414:'Kuwait',418:'Laos',422:'Lebanon',434:'Libya',484:'Mexico',
+  504:'Morocco',508:'Mozambique',516:'Namibia',524:'Nepal',528:'Netherlands',
+  540:'New Caledonia',554:'New Zealand',558:'Nicaragua',562:'Niger',
+  566:'Nigeria',578:'Norway',586:'Pakistan',591:'Panama',604:'Peru',
+  608:'Philippines',616:'Poland',620:'Portugal',630:'Puerto Rico',
+  642:'Romania',643:'Russia',646:'Rwanda',682:'Saudi Arabia',
+  686:'Senegal',694:'Sierra Leone',706:'Somalia',710:'South Africa',
+  724:'Spain',729:'Sudan',752:'Sweden',756:'Switzerland',760:'Syria',
+  762:'Tajikistan',764:'Thailand',768:'Togo',788:'Tunisia',792:'Turkey',
+  800:'Uganda',804:'Ukraine',784:'United Arab Emirates',826:'United Kingdom',
+  840:'United States',858:'Uruguay',860:'Uzbekistan',862:'Venezuela',
+  704:'Vietnam',887:'Yemen',894:'Zambia',716:'Zimbabwe',
+};
+
+// ══════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════
+let ws         = null;
+let myId       = null;
+let myColor    = null;
+let myName     = '';
+let roomCode   = null;
+let mapKey     = 'world';
+let players    = {};   // id → { name, color, territories:Set, troops }
+let territories = {};  // countryId → playerId
+let topoData   = null;
+let features   = [];   // GeoJSON features
+let featureMap = {};   // numericId → feature
+
+// Transform state
+let transform  = { x: 0, y: 0, k: 1 };
+let isDragging = false;
+let dragStart  = { x: 0, y: 0 };
+let lastTransform = null;
+
+// Canvas & projection
+const canvas   = document.getElementById('game-canvas');
+const ctx      = canvas.getContext('2d');
+const mmCanvas = document.getElementById('minimap-canvas');
+const mmCtx    = mmCanvas.getContext('2d');
+
+let projection = null;
+let pathGen    = null;
+let pathGenMM  = null;
+
+// Hover
+let hoveredId  = null;
+
+// ══════════════════════════════════════════════════════
+//  INIT — read params from URL or sessionStorage
+// ══════════════════════════════════════════════════════
+function getParams() {
+  const p = new URLSearchParams(location.search);
+  return {
+    room:     p.get('room')     || sessionStorage.getItem('roomCode') || 'TEST01',
+    map:      p.get('map')      || sessionStorage.getItem('map')      || 'world',
+    username: p.get('username') || sessionStorage.getItem('username') || 'Commander',
+  };
+}
+
+// ══════════════════════════════════════════════════════
+//  LOADING HELPERS
+// ══════════════════════════════════════════════════════
+function setLoad(pct, text) {
+  document.getElementById('loading-bar').style.width = pct + '%';
+  document.getElementById('loading-text').textContent = text;
+}
+function hideLoading() {
+  const el = document.getElementById('loading');
+  el.classList.add('fade');
+  setTimeout(() => el.remove(), 700);
+}
+
+// ══════════════════════════════════════════════════════
+//  CANVAS RESIZE
+// ══════════════════════════════════════════════════════
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  mmCanvas.width  = 160;
+  mmCanvas.height = 90;
+  if (topoData) { buildProjection(); redraw(); drawMinimap(); }
+}
+window.addEventListener('resize', resize);
+
+// ══════════════════════════════════════════════════════
+//  PROJECTION
+// ══════════════════════════════════════════════════════
+function buildProjection() {
+  const w = canvas.width, h = canvas.height;
+  projection = d3.geoNaturalEarth1()
+    .scale(Math.max(w / 5.8, h / 3))
+    .translate([w / 2, h / 2.1]);
+  pathGen = d3.geoPath(projection, ctx);
+
+  // Minimap projection
+  const mmProj = d3.geoNaturalEarth1()
+    .scale(26).translate([80, 48]);
+  pathGenMM = d3.geoPath(mmProj, mmCtx);
+}
+
+// ══════════════════════════════════════════════════════
+//  LOAD MAP DATA
+// ══════════════════════════════════════════════════════
+async function loadMap(key) {
+  const src = MAP_SOURCES[key] || MAP_SOURCES.world;
+  setLoad(20, 'Fetching map data…');
+  const world = await d3.json(src.url);
+  topoData = world;
+  setLoad(60, 'Rendering territories…');
+
+  const geoms = world.objects[src.topo].geometries;
+  features = topojson.feature(world, world.objects[src.topo]).features;
+
+  // Build id → feature map
+  featureMap = {};
+  features.forEach(f => {
+    featureMap[+f.id] = f;
+  });
+
+  setLoad(85, 'Preparing battlefield…');
+  buildProjection();
+  resize();
+  setLoad(100, 'Ready.');
+  setTimeout(hideLoading, 400);
+}
+
+// ══════════════════════════════════════════════════════
+//  DRAW
+// ══════════════════════════════════════════════════════
+function redraw() {
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  // Ocean = pure black
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.translate(transform.x, transform.y);
+  ctx.scale(transform.k, transform.k);
+
+  // Draw each feature
+  features.forEach(f => {
+    const id = +f.id;
+    const owner = territories[id];
+    const isHovered = id === hoveredId;
+
+    ctx.beginPath();
+    pathGen(f);
+
+    if (owner && players[owner]) {
+      // Claimed — fill with player color
+      const col = players[owner].color;
+      ctx.fillStyle = isHovered ? lighten(col, 30) : col + 'CC'; // slight transparency
+      ctx.fill();
+    } else {
+      // Unclaimed
+      ctx.fillStyle = isHovered ? 'rgba(201,168,76,0.12)' : 'rgba(201,168,76,0.04)';
+      ctx.fill();
+    }
+
+    // Gold outline
+    ctx.strokeStyle = isHovered ? 'rgba(201,168,76,0.9)' : 'rgba(201,168,76,0.35)';
+    ctx.lineWidth = isHovered ? 1.2 / transform.k : 0.6 / transform.k;
+    ctx.stroke();
+  });
+
+  // Graticule
+  ctx.beginPath();
+  pathGen(d3.geoGraticule()());
+  ctx.strokeStyle = 'rgba(201,168,76,0.04)';
+  ctx.lineWidth = 0.4 / transform.k;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawMinimap() {
+  mmCtx.clearRect(0, 0, 160, 90);
+  mmCtx.fillStyle = '#000';
+  mmCtx.fillRect(0, 0, 160, 90);
+
+  features.forEach(f => {
+    const id = +f.id;
+    const owner = territories[id];
+    mmCtx.beginPath();
+    pathGenMM(f);
+    mmCtx.fillStyle = owner && players[owner] ? players[owner].color + '99' : 'rgba(201,168,76,0.06)';
+    mmCtx.fill();
+    mmCtx.strokeStyle = 'rgba(201,168,76,0.25)';
+    mmCtx.lineWidth = 0.3;
+    mmCtx.stroke();
+  });
+
+  // Viewport indicator
+  const vx = -transform.x / transform.k / canvas.width  * 160;
+  const vy = -transform.y / transform.k / canvas.height * 90;
+  const vw = 160 / transform.k;
+  const vh = 90  / transform.k;
+  mmCtx.strokeStyle = 'rgba(201,168,76,0.6)';
+  mmCtx.lineWidth = 1;
+  mmCtx.strokeRect(vx, vy, vw, vh);
+}
+
+function lighten(hex, amt) {
+  const n = parseInt(hex.replace('#',''), 16);
+  const r = Math.min(255, (n >> 16) + amt);
+  const g = Math.min(255, ((n >> 8) & 0xff) + amt);
+  const b = Math.min(255, (n & 0xff) + amt);
+  return `rgb(${r},${g},${b})`;
+}
+
+// ══════════════════════════════════════════════════════
+//  HIT TEST — find feature under mouse
+// ══════════════════════════════════════════════════════
+function featureAtPoint(cx, cy) {
+  // Transform mouse → map coords
+  const mx = (cx - transform.x) / transform.k;
+  const my = (cy - transform.y) / transform.k;
+
+  for (const f of features) {
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.scale(transform.k, transform.k);
+    ctx.beginPath();
+    pathGen(f);
+    const hit = ctx.isPointInPath(cx, cy);
+    ctx.restore();
+    if (hit) return f;
+  }
+  return null;
+}
+
+// ══════════════════════════════════════════════════════
+//  TOOLTIP
+// ══════════════════════════════════════════════════════
+const tooltip = document.getElementById('tooltip');
+function showTooltip(f, x, y) {
+  const id    = +f.id;
+  const name  = COUNTRY_NAMES[id] || `Territory ${id}`;
+  const owner = territories[id];
+  const pl    = owner ? players[owner] : null;
+
+  document.getElementById('tt-nation').textContent     = name;
+  document.getElementById('tt-owner').textContent      = pl ? pl.name : 'Unclaimed';
+  document.getElementById('tt-troops').textContent     = pl ? (pl.troops || 0) : '—';
+  document.getElementById('tt-territories').textContent = pl ? pl.territories.size : '—';
+
+  tooltip.style.left = (x - 70) + 'px';
+  tooltip.style.top  = (y - 95) + 'px';
+  tooltip.classList.add('visible');
+}
+function hideTooltip() { tooltip.classList.remove('visible'); }
+
+// ══════════════════════════════════════════════════════
+//  ZOOM / PAN
+// ══════════════════════════════════════════════════════
+function applyZoom(delta, cx, cy) {
+  const factor = delta > 0 ? 1.15 : 0.87;
+  const newK   = Math.min(Math.max(transform.k * factor, 0.5), 12);
+  transform.x  = cx - (cx - transform.x) * (newK / transform.k);
+  transform.y  = cy - (cy - transform.y) * (newK / transform.k);
+  transform.k  = newK;
+  redraw(); drawMinimap();
+}
+function zoomIn()    { applyZoom(-1, canvas.width/2, canvas.height/2); }
+function zoomOut()   { applyZoom(1,  canvas.width/2, canvas.height/2); }
+function resetZoom() { transform = {x:0,y:0,k:1}; redraw(); drawMinimap(); }
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  applyZoom(e.deltaY, e.clientX, e.clientY);
+}, { passive: false });
+
+canvas.addEventListener('mousedown', e => {
+  isDragging = true;
+  dragStart  = { x: e.clientX - transform.x, y: e.clientY - transform.y };
+});
+window.addEventListener('mouseup', e => { isDragging = false; });
+window.addEventListener('mousemove', e => {
+  if (isDragging) {
+    transform.x = e.clientX - dragStart.x;
+    transform.y = e.clientY - dragStart.y;
+    redraw(); drawMinimap();
+    hideTooltip(); hoveredId = null;
+    return;
+  }
+
+  // Hover hit test (throttled)
+  const f = featureAtPoint(e.clientX, e.clientY);
+  const newId = f ? +f.id : null;
+  if (newId !== hoveredId) {
+    hoveredId = newId;
+    redraw();
+  }
+  if (f) {
+    showTooltip(f, e.clientX, e.clientY);
+  } else {
+    hideTooltip();
+  }
+});
+
+// Touch support
+let lastTouchDist = null;
+canvas.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    dragStart  = { x: e.touches[0].clientX - transform.x, y: e.touches[0].clientY - transform.y };
+  } else if (e.touches.length === 2) {
+    isDragging = false;
+    lastTouchDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+  }
+}, { passive: true });
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (e.touches.length === 1 && isDragging) {
+    transform.x = e.touches[0].clientX - dragStart.x;
+    transform.y = e.touches[0].clientY - dragStart.y;
+    redraw(); drawMinimap();
+  } else if (e.touches.length === 2 && lastTouchDist) {
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    applyZoom(lastTouchDist > dist ? 1 : -1, cx, cy);
+    lastTouchDist = dist;
+  }
+}, { passive: false });
+canvas.addEventListener('touchend', () => { isDragging = false; lastTouchDist = null; });
+
+// Click to claim
+canvas.addEventListener('click', e => {
+  if (Math.abs(e.movementX) > 3 || Math.abs(e.movementY) > 3) return; // was a drag
+  const f = featureAtPoint(e.clientX, e.clientY);
+  if (!f) return;
+  const id = +f.id;
+  // Only claim unclaimed or check game rules
+  send({ type: 'claim_territory', territory: id });
+});
+
+// ══════════════════════════════════════════════════════
+//  WEBSOCKET
+// ══════════════════════════════════════════════════════
+function connectWS(code, username) {
+  ws = new WebSocket(`${SERVER_WS}/room/${code}`);
+
+  ws.addEventListener('open', () => {
+    send({ type: 'join', username, isHost: false, settings: { map: mapKey } });
+  });
+
+  ws.addEventListener('message', e => {
+    try { handleMsg(JSON.parse(e.data)); }
+    catch(err) { console.warn(err); }
+  });
+
+  ws.addEventListener('close', () => toast('Disconnected from server', 'error'));
+  ws.addEventListener('error', () => toast('Connection error', 'error'));
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+function handleMsg(msg) {
+  switch(msg.type) {
+    case 'welcome':
+      myId = msg.id;
+      myColor = PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length];
+      players[myId] = { name: myName, color: myColor, territories: new Set(), troops: 10 };
+      updateSelfCard();
+      toast('Entered the battlefield', 'success');
+      break;
+
+    case 'playerList':
+      msg.players.forEach((p, i) => {
+        if (!players[p.id]) {
+          players[p.id] = {
+            name: p.name,
+            color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+            territories: new Set(),
+            troops: 10,
+          };
+        }
+      });
+      updateScoreboard();
+      updateHUD();
+      break;
+
+    case 'playerJoined':
+      if (!players[msg.player.id]) {
+        const idx = Object.keys(players).length;
+        players[msg.player.id] = {
+          name: msg.player.name,
+          color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+          territories: new Set(),
+          troops: 10,
+        };
+        toast(`${msg.player.name} entered the field`, 'info');
+        updateScoreboard(); updateHUD();
+      }
+      break;
+
+    case 'playerLeft':
+      if (players[msg.id]) {
+        toast(`${players[msg.id].name} left`, 'info');
+        delete players[msg.id];
+        updateScoreboard(); updateHUD();
+        redraw();
+      }
+      break;
+
+    case 'territory_claimed':
+      claimTerritory(msg.territory, msg.playerId);
+      break;
+
+    case 'turn_change':
+      document.getElementById('hud-turn').textContent = msg.turn + 1;
+      flashTurnBanner(`Turn ${msg.turn + 1}`);
+      break;
+
+    case 'gameStart':
+      toast('Campaign has begun!', 'success');
+      break;
+
+    case 'pong': break;
+    default: console.log('[WS]', msg);
+  }
+}
+
+function claimTerritory(id, playerId) {
+  // Remove from previous owner
+  const prev = territories[id];
+  if (prev && players[prev]) players[prev].territories.delete(id);
+
+  territories[id] = playerId;
+  if (players[playerId]) players[playerId].territories.add(id);
+
+  updateScoreboard();
+  updateSelfCard();
+  redraw(); drawMinimap();
+}
+
+// ══════════════════════════════════════════════════════
+//  HUD UPDATES
+// ══════════════════════════════════════════════════════
+function updateSelfCard() {
+  const me = players[myId];
+  if (!me) return;
+  document.getElementById('self-name').textContent = me.name;
+  document.getElementById('self-territories').textContent = me.territories.size;
+  document.getElementById('self-troops').textContent = me.troops || 0;
+  document.getElementById('self-dot').style.background = me.color;
+}
+
+function updateScoreboard() {
+  const list = document.getElementById('score-list');
+  list.innerHTML = '';
+  const sorted = Object.entries(players).sort((a,b) => b[1].territories.size - a[1].territories.size);
+  sorted.forEach(([id, p]) => {
+    const row = document.createElement('div');
+    row.className = 'score-row';
+    row.innerHTML = `
+      <div class="score-dot" style="background:${p.color}"></div>
+      <span class="score-name">${escHtml(p.name)}${id === myId ? ' <span style="color:var(--text-muted);font-size:11px">(you)</span>' : ''}</span>
+      <span class="score-territories">${p.territories.size}</span>
+    `;
+    list.appendChild(row);
+  });
+}
+
+function updateHUD() {
+  document.getElementById('hud-players').textContent = Object.keys(players).length;
+  document.getElementById('hud-map').textContent = mapKey.charAt(0).toUpperCase() + mapKey.slice(1);
+}
+
+function flashTurnBanner(text) {
+  const el = document.getElementById('turn-banner');
+  el.textContent = text;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 2500);
+}
+
+// ══════════════════════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════════════════════
+function toast(msg, type = 'info', dur = 3000) {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), dur);
+}
+
+function escHtml(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ══════════════════════════════════════════════════════
+//  KEEPALIVE
+// ══════════════════════════════════════════════════════
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'ping', t: Date.now() });
+}, 15000);
+
+// ══════════════════════════════════════════════════════
+//  BOOT
+// ══════════════════════════════════════════════════════
+async function boot() {
+  const params = getParams();
+  roomCode = params.room;
+  mapKey   = params.map;
+  myName   = params.username;
+
+  resize();
+  await loadMap(mapKey);
+  connectWS(roomCode, myName);
+}
+
+boot();
+</script>
+</body>
+</html>

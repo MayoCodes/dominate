@@ -937,10 +937,10 @@ function handleStart() {
 }
 
 function handleGameStart(msg) {
-  // This is where you'd transition to the actual game canvas.
-  // For now we surface a clear message.
-  toast('Game starting! Transition to game view here.', 'success', 5000);
-  console.log('Game start payload:', msg);
+  sessionStorage.setItem('roomCode', roomCode);
+  sessionStorage.setItem('map', lobbySettings.map);
+  sessionStorage.setItem('username', document.getElementById('username').value.trim());
+  window.location.href = 'game.html';
 }
 
 function handleLeave() {
