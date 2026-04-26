@@ -344,11 +344,17 @@ const PLAYER_COLORS = [
 
 // ══════════════════════════════════════════════
 //  PIXEL GRID  — this IS the game world
-//  (map polygons are just border decoration)
+//  Grid is rendered using the SAME projection as
+//  the map overlay so tiles align with borders.
 // ══════════════════════════════════════════════
 const GRID_W = 1200, GRID_H = 600;
 let gridLand  = null;  // Uint8Array  [GRID_W*GRID_H]  1=land 0=water
 let gridOwner = null;  // Uint32Array [GRID_W*GRID_H]  0=unclaimed, else playerIdx
+
+// The grid projection — fixed at GRID_W×GRID_H, matches rasterization.
+// screenToCell and drawGrid use this, NOT canvas dimensions.
+let gridProj = null;   // d3 projection at grid resolution
+let gridScale = 1;     // canvas.width / GRID_W  (for drawImage scaling)
 
 // Player index maps
 let playerIdx  = {};   // playerId  → 1-based index
@@ -425,10 +431,20 @@ window.addEventListener('resize', resize);
 
 function buildProjection() {
   const w = canvas.width, h = canvas.height;
+
+  // Screen projection — used for drawing borders and dots
   projection = d3.geoNaturalEarth1()
     .scale(Math.max(w / 5.8, h / 3))
     .translate([w / 2, h / 2.1]);
   pathGen = d3.geoPath(projection, ctx);
+
+  // Grid projection — FIXED at GRID_W x GRID_H.
+  // Rasterization uses this exact same projection so grid tiles
+  // align perfectly with the border overlay drawn by pathGen.
+  gridProj = d3.geoNaturalEarth1()
+    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
+    .translate([GRID_W / 2, GRID_H / 2.1]);
+
   const mmProj = d3.geoNaturalEarth1().scale(24).translate([75, 44]);
   pathGenMM = d3.geoPath(mmProj, mmCtx);
 }
@@ -467,10 +483,8 @@ function rasterizeGrid() {
   off.width = GRID_W; off.height = GRID_H;
   const oc  = off.getContext('2d', { willReadFrequently: true });
 
-  const gProj = d3.geoNaturalEarth1()
-    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
-    .translate([GRID_W / 2, GRID_H / 2.1]);
-  const gPath = d3.geoPath(gProj, oc);
+  // Use the shared gridProj so rasterization coords match drawGrid perfectly
+  const gPath = d3.geoPath(gridProj, oc);
 
   oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
   oc.fillStyle = '#fff';
@@ -492,10 +506,8 @@ function buildCellCountryMap() {
   off.width = GRID_W; off.height = GRID_H;
   const oc  = off.getContext('2d', { willReadFrequently: true });
 
-  const gProj = d3.geoNaturalEarth1()
-    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
-    .translate([GRID_W / 2, GRID_H / 2.1]);
-  const gPath = d3.geoPath(gProj, oc);
+  // Must use the same gridProj as rasterizeGrid
+  const gPath = d3.geoPath(gridProj, oc);
 
   oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
   features.forEach((f, i) => {
@@ -539,18 +551,24 @@ function cellToCountry(idx) {
 //  GRID HELPERS
 // ══════════════════════════════════════════════
 function screenToCell(sx, sy) {
-  const gx = Math.floor(((sx - transform.x) / transform.k) / canvas.width  * GRID_W);
-  const gy = Math.floor(((sy - transform.y) / transform.k) / canvas.height * GRID_H);
+  // Convert screen coords → geo (using screen projection) → grid cell (using gridProj)
+  if (!projection || !gridProj) return -1;
+  const screenPt = [(sx - transform.x) / transform.k, (sy - transform.y) / transform.k];
+  const geo = projection.invert(screenPt);
+  if (!geo) return -1;
+  const [gx0, gy0] = gridProj(geo);
+  const gx = Math.floor(gx0), gy = Math.floor(gy0);
   if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
   return gy * GRID_W + gx;
 }
 
 function cellToScreen(idx) {
+  if (!gridProj || !projection) return [0,0];
   const gx = idx % GRID_W, gy = Math.floor(idx / GRID_W);
-  return [
-    (gx + 0.5) / GRID_W * canvas.width  * transform.k + transform.x,
-    (gy + 0.5) / GRID_H * canvas.height * transform.k + transform.y,
-  ];
+  const geo = gridProj.invert([gx + 0.5, gy + 0.5]);
+  if (!geo) return [0,0];
+  const [sx, sy] = projection(geo);
+  return [sx * transform.k + transform.x, sy * transform.k + transform.y];
 }
 
 function cellNeighbors(idx) {
@@ -617,12 +635,14 @@ function countMyTiles() {
 //  then replay path forward, capturing 1 tile/tick
 // ══════════════════════════════════════════════
 let floodActive   = false;
-let floodFrontier = [];
+let floodFrontier = new Set();
 let floodInterval = null;
 
 function cancelFlood() {
   floodActive = false;
-  floodFrontier = [];
+  floodFrontier = new Set();
+  floodTarget   = -1;
+  floodVisited  = null;
   if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
 }
 
@@ -663,50 +683,98 @@ function bfsPathToTarget(targetIdx) {
   return null;
 }
 
+// floodTarget is the destination cell.
+// floodFrontier is the CURRENT wave front (Set of cell indices adjacent to our territory,
+// on the path toward the target). Each tick we claim the entire wave, then build next wave.
+// This is Minecraft-water expansion: all reachable border tiles advance simultaneously.
+
+let floodTarget   = -1;
+let floodVisited  = null;  // Uint8Array — prevents revisiting
+
 function startFloodToCell(targetIdx) {
   cancelFlood();
-  const path = bfsPathToTarget(targetIdx);
-  if (!path || path.length === 0) {
-    if (!gridLand[targetIdx]) {
-      toast('Cannot expand into ocean', 'error', 1800);
-    } else {
-      toast('Unreachable — separated by water', 'error', 1800);
-    }
+  if (!gridLand[targetIdx]) {
+    toast('Cannot expand into ocean', 'error', 1800);
+    return;
+  }
+  const myPidx = getPlayerIdx(myId);
+  if (gridOwner[targetIdx] === myPidx) return;
+
+  // Quick BFS check: is target reachable at all?
+  const testPath = bfsPathToTarget(targetIdx);
+  if (!testPath) {
+    toast('Unreachable — separated by water', 'error', 1800);
     return;
   }
 
-  floodActive   = true;
-  floodFrontier = path;
-  toast(`Expanding ${path.length} tile${path.length > 1 ? 's' : ''}…`, 'info', 1500);
+  floodTarget  = targetIdx;
+  floodActive  = true;
+  floodVisited = new Uint8Array(GRID_W * GRID_H);
 
-  // Fire one tile per ~33ms (≈30 tiles/sec) — OpenFront pacing
-  floodInterval = setInterval(floodTick, 33);
+  // Seed frontier: all land tiles we already own
+  const frontier = new Set();
+  for (let i = 0; i < gridOwner.length; i++) {
+    if (gridOwner[i] === myPidx) {
+      for (const n of cellNeighbors(i)) {
+        if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
+          frontier.add(n);
+          floodVisited[n] = 1;
+        }
+      }
+    }
+  }
+
+  floodFrontier = frontier;
+  // Wave every 80ms — feels like water flowing, not a bullet train
+  floodInterval = setInterval(floodTick, 80);
   floodTick();
 }
 
 function floodTick() {
-  if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
+  if (!floodActive || floodFrontier.size === 0) { cancelFlood(); return; }
   const myPidx = getPlayerIdx(myId);
 
-  const tileIdx = floodFrontier.shift();
-  if (tileIdx === undefined) { cancelFlood(); return; }
+  const currentWave = floodFrontier;
+  const nextWave    = new Set();
 
-  // Skip if somehow already ours
-  if (gridOwner[tileIdx] === myPidx) { floodTick(); return; }
+  for (const tileIdx of currentWave) {
+    // Skip if somehow claimed between ticks
+    if (gridOwner[tileIdx] === myPidx) continue;
 
-  // Claim locally (immediate visual feedback)
-  claimTile(tileIdx, myId);
+    // Claim the tile
+    claimTile(tileIdx, myId);
 
-  // Report to server (country-level)
-  const cid = cellToCountry(tileIdx);
-  if (cid) {
-    territories[cid] = myId;
-    if (players[myId]) players[myId].territories.add(cid);
-    send({ type: 'attack', territory: cid, attackRatio });
+    // Server sync
+    const cid = cellToCountry(tileIdx);
+    if (cid) {
+      territories[cid] = myId;
+      if (players[myId]) players[myId].territories.add(cid);
+      send({ type: 'attack', territory: cid, attackRatio });
+    }
+
+    // Grow next wave from this newly-captured tile
+    for (const n of cellNeighbors(tileIdx)) {
+      if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
+        nextWave.add(n);
+        floodVisited[n] = 1;
+      }
+    }
   }
 
   updateSelfCard();
-  if (floodFrontier.length === 0) cancelFlood();
+
+  // Stop if target is captured or no more frontier
+  if (floodTarget >= 0 && gridOwner[floodTarget] === myPidx) {
+    cancelFlood();
+    return;
+  }
+
+  if (nextWave.size === 0) {
+    cancelFlood();
+    return;
+  }
+
+  floodFrontier = nextWave;
 }
 
 // ══════════════════════════════════════════════
@@ -771,11 +839,15 @@ function drawGrid() {
 
   _gridOffCtx.putImageData(_gridImg, 0, 0);
 
-  // Scale to canvas with current pan/zoom — crisp pixel blocks
+  // The grid image is at GRID_W×GRID_H in gridProj space.
+  // The screen projection maps the same geo extents to canvas.width×canvas.height.
+  // So we scale the image by (canvas.width/GRID_W) * transform.k and offset by transform.
+  const sx = transform.x;
+  const sy = transform.y;
+  const sw = canvas.width  * transform.k;
+  const sh = canvas.height * transform.k;
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(_gridOff, transform.x, transform.y,
-    canvas.width  * transform.k,
-    canvas.height * transform.k);
+  ctx.drawImage(_gridOff, sx, sy, sw, sh);
 }
 
 function redraw() {
@@ -1077,9 +1149,8 @@ function endPlacement() {
     }
     if (startIdx >= 0) {
       const gx = startIdx % GRID_W, gy = Math.floor(startIdx / GRID_W);
-      const sx = (gx + 0.5) / GRID_W * canvas.width  * transform.k + transform.x;
-      const sy = (gy + 0.5) / GRID_H * canvas.height * transform.k + transform.y;
-      const geo = screenToGeo(sx, sy);
+      // Use gridProj.invert to get geo from grid cell (no screen math needed)
+      const geo = gridProj ? gridProj.invert([gx + 0.5, gy + 0.5]) : [0, 0];
       players[myId].dot = geo;
       myPlaced = true;
       seedPlayerTiles(startIdx, myId, 3);
@@ -1282,12 +1353,14 @@ function handleMsg(msg) {
       if (players[msg.playerId]) players[msg.playerId].dot = msg.geo;
       if (msg.countryId !== undefined && msg.playerId !== myId) {
         // Seed their starting tiles
-        if (msg.geo && gridLand) {
-          const screenPt = projection(msg.geo);
-          const sx = screenPt[0] * transform.k + transform.x;
-          const sy = screenPt[1] * transform.k + transform.y;
-          const ci = screenToCell(sx, sy);
-          if (ci >= 0 && gridLand[ci]) seedPlayerTiles(ci, msg.playerId, 3);
+        if (msg.geo && gridLand && gridProj) {
+          // Use gridProj directly to find the grid cell — avoids screen coord confusion
+          const [gx0, gy0] = gridProj(msg.geo);
+          const gx = Math.floor(gx0), gy = Math.floor(gy0);
+          if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
+            const ci = gy * GRID_W + gx;
+            if (gridLand[ci]) seedPlayerTiles(ci, msg.playerId, 3);
+          }
         }
         captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
       }
