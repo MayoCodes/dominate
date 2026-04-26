@@ -833,24 +833,72 @@ function handleClick(cx, cy) {
       return;
     }
 
-    // Must be adjacent to my territory
     const myTerr = players[myId]?.territories || new Set();
-    let canAttack = false;
-    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(id)) canAttack = true; });
 
-    if (!canAttack) {
-      toast('Not adjacent to your territory', 'error', 1800);
-      clearTarget();
+    // Check direct adjacency first (fast path)
+    let isDirectlyAdjacent = false;
+    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(id)) isDirectlyAdjacent = true; });
+
+    if (isDirectlyAdjacent) {
+      // Normal direct attack
+      selectedTarget = id;
+      const btn = document.getElementById('attack-btn');
+      const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
+      btn.disabled = false;
+      btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
+      btn.className = 'attack-btn active';
       return;
     }
 
-    // Select this target
-    selectedTarget = id;
-    const btn = document.getElementById('attack-btn');
-    const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
-    btn.disabled = false;
-    btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
-    btn.className = 'attack-btn active';
+    // BFS: check if target is reachable through my own territories from any of my border tiles.
+    // This allows clicking anywhere in your general region — troops flow outward through your land.
+    // Only fails if the target is truly separated by water (not connected via land adjacency at all).
+    if (myTerr.size > 0) {
+      // BFS through MY territories to find ones adjacent to target
+      // We want: is there a path through my land that gets adjacent to the target?
+      // Equivalent: is the target reachable via land-adjacency from ANY of my territories
+      // (through my territory graph)? Since my territories are one connected blob normally,
+      // we just check if ANY of my territories is adjacent to the target via BFS through my tiles.
+      // The simpler correct check: BFS from target outward through all land (not just mine),
+      // see if we hit any of my territory before crossing water. If yes → valid expansion.
+
+      // BFS from target through contiguous land to see if my territory is reachable
+      const visited = new Set();
+      const queue = [id];
+      visited.add(id);
+      let reachable = false;
+      let steps = 0;
+      const MAX_STEPS = 500; // prevent runaway on large maps
+
+      while (queue.length > 0 && steps < MAX_STEPS) {
+        steps++;
+        const current = queue.shift();
+        const neighbors = adjacency[current] || new Set();
+        for (const nid of neighbors) {
+          if (visited.has(nid)) continue;
+          visited.add(nid);
+          if (myTerr.has(nid)) {
+            reachable = true;
+            break;
+          }
+          // Only traverse through unclaimed or enemy land (not across water gaps)
+          // adjacency already only contains land borders, so all neighbors are land
+          queue.push(nid);
+        }
+        if (reachable) break;
+      }
+
+      if (reachable) {
+        // Valid — auto-expand by launching BFS wave attacks outward
+        // Queue up a sequential flood attack from the border inward to the target
+        launchFloodAttack(id);
+        return;
+      }
+    }
+
+    // Truly unreachable (separated by water)
+    toast('Cannot reach — separated by water', 'error', 1800);
+    clearTarget();
   }
 }
 
@@ -898,6 +946,141 @@ function launchAttack() {
 
   toast(`Attack launched! (${Math.round(attackRatio*100)}%)`, 'info', 1500);
   clearTarget();
+}
+
+// ══════════════════════════════════════════════
+//  FLOOD ATTACK
+//  OpenFront-style: BFS from border outward toward
+//  the clicked target, firing attacks wave by wave
+// ══════════════════════════════════════════════
+let floodQueue = [];      // pending territory ids to attack in order
+let floodInterval = null; // timer driving the wave
+let floodTarget = null;   // final destination
+
+function launchFloodAttack(targetId) {
+  // Build BFS path from MY border territories toward target
+  // We find the shortest land path from ANY of my territories → target
+  const myTerr = players[myId]?.territories || new Set();
+
+  // BFS from targetId back toward my territory, recording parent map
+  const parent = new Map();
+  const queue = [targetId];
+  parent.set(targetId, null);
+  let found = null;
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    const neighbors = adjacency[cur] || new Set();
+    for (const nid of neighbors) {
+      if (parent.has(nid)) continue;
+      parent.set(nid, cur);
+      if (myTerr.has(nid)) { found = nid; break; }
+      queue.push(nid);
+    }
+    if (found !== null) break;
+  }
+
+  if (found === null) {
+    toast('Cannot reach — separated by water', 'error', 1800);
+    return;
+  }
+
+  // Reconstruct path from found (my territory) → targetId
+  const path = [];
+  let cur = targetId;
+  while (cur !== found) {
+    path.unshift(cur);
+    cur = parent.get(cur);
+  }
+  // path is now [firstEnemy/unclaimed, ..., targetId]
+
+  if (path.length === 0) {
+    // target is directly adjacent, just normal attack
+    selectedTarget = targetId;
+    const btn = document.getElementById('attack-btn');
+    const ownerName = territories[targetId] && players[territories[targetId]] ? players[territories[targetId]].name : 'Unclaimed';
+    btn.disabled = false;
+    btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
+    btn.className = 'attack-btn active';
+    return;
+  }
+
+  // Cancel any existing flood
+  if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
+
+  floodQueue = path.slice(); // copy
+  floodTarget = targetId;
+
+  toast(`Expanding ${path.length} territories…`, 'info', 2000);
+
+  // Fire first step immediately, then step every 400ms
+  fireNextFloodStep();
+  floodInterval = setInterval(() => {
+    if (floodQueue.length === 0) {
+      clearInterval(floodInterval);
+      floodInterval = null;
+      return;
+    }
+    fireNextFloodStep();
+  }, 400);
+}
+
+function fireNextFloodStep() {
+  const me = players[myId];
+  if (!me) return;
+
+  // Find the next territory in the queue that is still attackable
+  // (we may have already captured some via enclosure or previous steps)
+  while (floodQueue.length > 0) {
+    const nextId = floodQueue[0];
+
+    // If we already own it, skip
+    if (territories[nextId] === myId) {
+      floodQueue.shift();
+      continue;
+    }
+
+    // Check adjacency to our current territory (may have grown)
+    const myTerr = me.territories;
+    let adj = false;
+    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(nextId)) adj = true; });
+
+    if (!adj) {
+      // Not yet adjacent — wait for previous captures to propagate
+      return;
+    }
+
+    // Fire the attack
+    floodQueue.shift();
+    selectedTarget = nextId;
+
+    send({ type: 'attack', territory: nextId, attackRatio });
+
+    // Spawn attack animation
+    let closestAdj = null, minDist = Infinity;
+    myTerr.forEach(tid => {
+      if ((adjacency[tid] || new Set()).has(nextId)) {
+        const c = featureCentroidScreen(tid);
+        if (!c) return;
+        const d = Math.hypot(c[0] - canvas.width/2, c[1] - canvas.height/2);
+        if (d < minDist) { minDist = d; closestAdj = tid; }
+      }
+    });
+    const fromC = closestAdj ? featureCentroidScreen(closestAdj) : null;
+    const toC = featureCentroidScreen(nextId);
+    if (fromC && toC) {
+      const animId = Date.now() + Math.random();
+      attackAnims.set(animId, {
+        from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
+        to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
+        progress: 0,
+        color: me.color,
+      });
+    }
+
+    clearTarget();
+    return; // one step per interval tick
+  }
 }
 
 // ══════════════════════════════════════════════
