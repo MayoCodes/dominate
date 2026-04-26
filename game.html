@@ -439,10 +439,13 @@ function buildProjection() {
   pathGen = d3.geoPath(projection, ctx);
 
   // Grid projection — FIXED at GRID_W x GRID_H.
-  // Rasterization uses this exact same projection so grid tiles
-  // align perfectly with the border overlay drawn by pathGen.
+  // CRITICAL: must use the exact same scale axis as the screen projection,
+  // just ratio'd down to grid dimensions. Using max(GRID_W/5.8, GRID_H/3)
+  // independently can pick a DIFFERENT axis (w-constrained vs h-constrained)
+  // causing the rotation/offset misalignment we see.
+  const canvasScale = Math.max(w / 5.8, h / 3);
   gridProj = d3.geoNaturalEarth1()
-    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
+    .scale(canvasScale * GRID_W / w)
     .translate([GRID_W / 2, GRID_H / 2.1]);
 
   const mmProj = d3.geoNaturalEarth1().scale(24).translate([75, 44]);
@@ -604,17 +607,23 @@ function claimTile(idx, pid) {
   gridOwner[idx] = getPlayerIdx(pid);
 }
 
-// Seed a diamond of land tiles around startIdx for initial placement
+// Seed starting tiles as a small irregular blob (circle + noise, no diamond)
 function seedPlayerTiles(startIdx, pid, radius) {
   const cx = startIdx % GRID_W, cy = Math.floor(startIdx / GRID_W);
   const pidx = getPlayerIdx(pid);
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      if (Math.abs(dx) + Math.abs(dy) > radius) continue;
-      const nx = cx + dx, ny = cy + dy;
-      if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
-      const ni = ny * GRID_W + nx;
-      if (gridLand[ni]) gridOwner[ni] = pidx;
+  // BFS flood-fill from center, stop when we hit 'radius' land tiles
+  const visited = new Set([startIdx]);
+  const queue   = [startIdx];
+  let claimed   = 0;
+  const target  = Math.PI * radius * radius | 0; // ~πr² tiles
+  while (queue.length > 0 && claimed < target) {
+    const idx = queue.splice(Math.floor(Math.random() * Math.min(queue.length, 4)), 1)[0];
+    if (gridLand[idx]) { gridOwner[idx] = pidx; claimed++; }
+    for (const n of cellNeighbors(idx)) {
+      if (!visited.has(n)) {
+        visited.add(n);
+        queue.push(n);
+      }
     }
   }
 }
@@ -635,12 +644,12 @@ function countMyTiles() {
 //  then replay path forward, capturing 1 tile/tick
 // ══════════════════════════════════════════════
 let floodActive   = false;
-let floodFrontier = new Set();
+let floodFrontier = [];  // sorted [dist, idx] pairs
 let floodInterval = null;
 
 function cancelFlood() {
-  floodActive = false;
-  floodFrontier = new Set();
+  floodActive   = false;
+  floodFrontier = [];   // sorted [dist, idx] pairs
   floodTarget   = -1;
   floodVisited  = null;
   if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
@@ -700,7 +709,7 @@ function startFloodToCell(targetIdx) {
   const myPidx = getPlayerIdx(myId);
   if (gridOwner[targetIdx] === myPidx) return;
 
-  // Quick BFS check: is target reachable at all?
+  // Quick reachability check via BFS
   const testPath = bfsPathToTarget(targetIdx);
   if (!testPath) {
     toast('Unreachable — separated by water', 'error', 1800);
@@ -711,40 +720,68 @@ function startFloodToCell(targetIdx) {
   floodActive  = true;
   floodVisited = new Uint8Array(GRID_W * GRID_H);
 
-  // Seed frontier: all land tiles we already own
-  const frontier = new Set();
+  // Target grid coords — used for directional biasing
+  const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
+
+  // Seed frontier: border tiles, pre-scored by distance to target
+  // We store [score, cellIdx] so we can sort the wave each tick
+  const myPidxLocal = myPidx;
+  const frontier = [];
   for (let i = 0; i < gridOwner.length; i++) {
-    if (gridOwner[i] === myPidx) {
-      for (const n of cellNeighbors(i)) {
-        if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
-          frontier.add(n);
-          floodVisited[n] = 1;
-        }
+    if (gridOwner[i] !== myPidxLocal) continue;
+    for (const n of cellNeighbors(i)) {
+      if (gridLand[n] && gridOwner[n] !== myPidxLocal && !floodVisited[n]) {
+        floodVisited[n] = 1;
+        const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
+        const dist = Math.hypot(nx - tx, ny - ty);
+        frontier.push([dist, n]);
       }
     }
   }
-
+  // Sort ascending by distance — closest to target expand first
+  frontier.sort((a, b) => a[0] - b[0]);
   floodFrontier = frontier;
-  // Wave every 80ms — feels like water flowing, not a bullet train
+
+  // Wave every 80ms — water-like pacing
   floodInterval = setInterval(floodTick, 80);
   floodTick();
 }
 
 function floodTick() {
-  if (!floodActive || floodFrontier.size === 0) { cancelFlood(); return; }
+  if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
   const myPidx = getPlayerIdx(myId);
+  const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
 
+  // Each tick: claim the CLOSEST wave of tiles (within a distance band)
+  // This makes expansion rush toward the target, then fill out sideways
   const currentWave = floodFrontier;
-  const nextWave    = new Set();
+  floodFrontier = [];
+  const nextBatch = [];
 
-  for (const tileIdx of currentWave) {
-    // Skip if somehow claimed between ticks
+  // Take tiles from the front of the sorted array that are within ~4 cells of the leading edge
+  const leadDist = currentWave.length > 0 ? currentWave[0][0] : 0;
+  const band = Math.max(8, leadDist * 0.15 + 4); // adaptive band width
+  let i = 0;
+  while (i < currentWave.length && (currentWave[i][0] <= leadDist + band)) {
+    nextBatch.push(currentWave[i]);
+    i++;
+  }
+  // Keep anything beyond the band for next tick
+  floodFrontier = currentWave.slice(i);
+
+  for (const [, tileIdx] of nextBatch) {
     if (gridOwner[tileIdx] === myPidx) continue;
 
-    // Claim the tile
+    // Add slight randomness — skip ~8% of tiles so edges look organic not geometric
+    if (Math.random() < 0.08 && tileIdx !== floodTarget) {
+      // Defer: put back in frontier  
+      const nx = tileIdx % GRID_W, ny = Math.floor(tileIdx / GRID_W);
+      floodFrontier.push([Math.hypot(nx - tx, ny - ty) + Math.random() * 3, tileIdx]);
+      continue;
+    }
+
     claimTile(tileIdx, myId);
 
-    // Server sync
     const cid = cellToCountry(tileIdx);
     if (cid) {
       territories[cid] = myId;
@@ -752,29 +789,28 @@ function floodTick() {
       send({ type: 'attack', territory: cid, attackRatio });
     }
 
-    // Grow next wave from this newly-captured tile
+    // Expand frontier from newly captured tile
     for (const n of cellNeighbors(tileIdx)) {
       if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
-        nextWave.add(n);
         floodVisited[n] = 1;
+        const nx2 = n % GRID_W, ny2 = Math.floor(n / GRID_W);
+        const dist = Math.hypot(nx2 - tx, ny2 - ty);
+        floodFrontier.push([dist, n]);
       }
     }
   }
 
+  // Keep frontier sorted for next tick
+  floodFrontier.sort((a, b) => a[0] - b[0]);
+
   updateSelfCard();
 
-  // Stop if target is captured or no more frontier
   if (floodTarget >= 0 && gridOwner[floodTarget] === myPidx) {
-    cancelFlood();
-    return;
+    cancelFlood(); return;
   }
-
-  if (nextWave.size === 0) {
-    cancelFlood();
-    return;
+  if (floodFrontier.length === 0) {
+    cancelFlood(); return;
   }
-
-  floodFrontier = nextWave;
 }
 
 // ══════════════════════════════════════════════
