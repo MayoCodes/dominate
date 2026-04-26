@@ -98,28 +98,66 @@
     background: linear-gradient(to top, rgba(0,0,0,0.82) 0%, transparent 100%);
     pointer-events: none;
   }
+
+  /* SELF CARD with sliders */
   .self-card {
-    display: flex; align-items: center; gap: 12px;
-    background: rgba(0,0,0,0.8); border: 1px solid rgba(201,168,76,0.2);
-    padding: 10px 16px; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 8px;
+    background: rgba(0,0,0,0.85); border: 1px solid rgba(201,168,76,0.2);
+    padding: 12px 16px; pointer-events: auto; min-width: 260px;
   }
+  .self-top { display: flex; align-items: center; gap: 12px; }
   .self-color-dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.3); flex-shrink: 0; }
   .self-name { font-family: 'Cinzel', serif; font-size: 11px; letter-spacing: 0.18em; color: var(--gold-light); }
-  .self-stat { font-family: 'EB Garamond', serif; font-size: 14px; color: var(--text-muted); }
+  .self-stat { font-family: 'EB Garamond', serif; font-size: 13px; color: var(--text-muted); }
   .self-stat strong { color: var(--text); }
+
+  /* SLIDERS */
+  .slider-row { display: flex; flex-direction: column; gap: 4px; }
+  .slider-label {
+    font-family: 'Cinzel', serif; font-size: 8px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--text-muted); display: flex; justify-content: space-between;
+  }
+  .slider-label span { color: var(--gold); }
+  input[type=range] {
+    -webkit-appearance: none; width: 100%; height: 2px;
+    background: rgba(201,168,76,0.2); outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--gold); border: 1px solid rgba(255,255,255,0.4);
+  }
+  input[type=range].attack-slider::-webkit-slider-thumb { background: var(--red); }
+
+  /* ATTACK BUTTON */
+  #attack-btn {
+    font-family: 'Cinzel', serif; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+    padding: 7px 14px; border: 1px solid rgba(201,76,76,0.5); color: var(--red);
+    background: rgba(201,76,76,0.08); cursor: pointer; width: 100%;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  #attack-btn:hover:not(:disabled) { background: rgba(201,76,76,0.18); border-color: rgba(201,76,76,0.8); }
+  #attack-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  #attack-btn.active { background: rgba(201,76,76,0.25); border-color: var(--red); }
+
+  /* TROOP BAR */
+  .troop-bar-wrap { width: 100%; height: 3px; background: rgba(201,168,76,0.1); border-radius: 2px; overflow: hidden; }
+  .troop-bar { height: 100%; background: var(--gold); transition: width 0.3s; border-radius: 2px; }
+  .troop-bar.near-max { background: var(--green); }
+  .troop-bar.optimal { background: var(--gold); }
+  .troop-bar.low { background: var(--red); }
 
   /* SCOREBOARD */
   #scoreboard {
     background: rgba(0,0,0,0.8); border: 1px solid rgba(201,168,76,0.15);
     padding: 12px 16px; min-width: 180px; pointer-events: auto;
-    max-height: 220px; overflow-y: auto;
+    max-height: 240px; overflow-y: auto;
   }
   .scoreboard-title { font-family: 'Cinzel', serif; font-size: 8px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; display: block; }
   .score-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(201,168,76,0.06); }
   .score-row:last-child { border-bottom: none; }
   .score-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .score-name { flex: 1; font-family: 'EB Garamond', serif; font-size: 14px; color: var(--text); }
-  .score-val { font-family: 'Cinzel', serif; font-size: 9px; color: var(--text-muted); }
+  .score-val { font-family: 'Cinzel', serif; font-size: 9px; color: var(--text-muted); letter-spacing: 0.1em; }
 
   /* ZOOM */
   #zoom-controls {
@@ -150,7 +188,7 @@
   #player-tooltip.visible { opacity: 1; }
   .ptt-inner {
     background: rgba(4,4,4,0.97); border: 1px solid rgba(201,168,76,0.35);
-    padding: 11px 15px; min-width: 145px; position: relative;
+    padding: 11px 15px; min-width: 160px; position: relative;
   }
   .ptt-inner::after {
     content: ''; position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%);
@@ -173,7 +211,27 @@
   .toast.success { border-color: rgba(76,170,110,0.4); color: var(--green); background: rgba(0,0,0,0.9); }
   .toast.error   { border-color: rgba(201,76,76,0.4);  color: var(--red);   background: rgba(0,0,0,0.9); }
 
+  /* ATTACK FLASH */
+  @keyframes captureFlash { 0%{opacity:0.8} 100%{opacity:0} }
+  .capture-flash { animation: captureFlash 0.5s ease-out forwards; }
+
   @keyframes toastIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
+
+  /* VICTORY OVERLAY */
+  #victory-overlay {
+    position: fixed; inset: 0; z-index: 600; background: rgba(0,0,0,0.92);
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  }
+  #victory-overlay.show { display: flex; }
+  .victory-title { font-family: 'Cinzel', serif; font-size: 42px; letter-spacing: 0.3em; color: var(--gold); }
+  .victory-sub { font-family: 'EB Garamond', serif; font-style: italic; font-size: 20px; color: var(--text-muted); }
+  .victory-btn {
+    font-family: 'Cinzel', serif; font-size: 11px; letter-spacing: 0.25em; text-transform: uppercase;
+    padding: 12px 32px; border: 1px solid rgba(201,168,76,0.5); color: var(--gold);
+    background: rgba(201,168,76,0.08); cursor: pointer; margin-top: 10px;
+    transition: background 0.2s;
+  }
+  .victory-btn:hover { background: rgba(201,168,76,0.18); }
 </style>
 </head>
 <body>
@@ -206,9 +264,10 @@
 <div id="hud-top">
   <div class="hud-logo">DOMINATE</div>
   <div class="hud-center">
-    <div class="hud-pill">Turn <span id="hud-turn">1</span></div>
+    <div class="hud-pill">Tick <span id="hud-turn">0</span></div>
     <div class="hud-pill">Map · <span id="hud-map">World</span></div>
     <div class="hud-pill"><span id="hud-players">0</span> Commanders</div>
+    <div class="hud-pill">Gold <span id="hud-gold">0</span></div>
   </div>
   <div></div>
 </div>
@@ -218,17 +277,46 @@
     <span class="ptt-name" id="ptt-name">—</span>
     <div class="ptt-row"><span>Troops</span><strong id="ptt-troops">0</strong></div>
     <div class="ptt-row"><span>Territories</span><strong id="ptt-territories">0</strong></div>
+    <div class="ptt-row"><span>Land %</span><strong id="ptt-pct">0%</strong></div>
   </div>
 </div>
 
 <div id="hud-bottom">
   <div class="self-card">
-    <div class="self-color-dot" id="self-dot"></div>
-    <div>
-      <div class="self-name" id="self-name">Commander</div>
-      <div class="self-stat">Territories: <strong id="self-territories">0</strong> · Troops: <strong id="self-troops">0</strong></div>
+    <div class="self-top">
+      <div class="self-color-dot" id="self-dot"></div>
+      <div style="flex:1">
+        <div class="self-name" id="self-name">Commander</div>
+        <div class="self-stat">
+          Troops: <strong id="self-troops">0</strong>/<strong id="self-max">1000</strong>
+          · Territories: <strong id="self-territories">0</strong>
+        </div>
+      </div>
     </div>
+
+    <!-- Troop fill bar (green at ~42% = optimal) -->
+    <div class="troop-bar-wrap">
+      <div class="troop-bar" id="troop-bar" style="width:5%"></div>
+    </div>
+
+    <!-- Worker ratio slider -->
+    <div class="slider-row">
+      <div class="slider-label">Workers <span id="worker-pct">20%</span></div>
+      <input type="range" id="worker-slider" min="0" max="100" value="20"
+        oninput="onWorkerSlider(this.value)">
+    </div>
+
+    <!-- Attack ratio slider -->
+    <div class="slider-row">
+      <div class="slider-label">Attack Ratio <span id="attack-pct">50%</span></div>
+      <input type="range" class="attack-slider" id="attack-slider" min="1" max="100" value="50"
+        oninput="onAttackSlider(this.value)">
+    </div>
+
+    <!-- Attack button (shown when a target is selected) -->
+    <button id="attack-btn" disabled onclick="launchAttack()">Select a territory to attack</button>
   </div>
+
   <div id="scoreboard">
     <span class="scoreboard-title">Commanders</span>
     <div id="score-list"></div>
@@ -243,6 +331,12 @@
 
 <div id="minimap"><canvas id="minimap-canvas"></canvas></div>
 
+<div id="victory-overlay">
+  <div class="victory-title">DOMINION</div>
+  <div class="victory-sub" id="victory-sub">Victory achieved</div>
+  <button class="victory-btn" onclick="location.reload()">Play Again</button>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
 <script>
@@ -251,7 +345,9 @@
 // ══════════════════════════════════════════════
 const SERVER_WS = 'wss://dominate-server.maiyo-studios.workers.dev';
 const PLACEMENT_SECS = 20;
-const CIRC = 2 * Math.PI * 27; // ~169.6
+const CIRC = 2 * Math.PI * 27;
+const WIN_PCT = 0.80; // 80% of territories to win
+const TOTAL_COUNTRIES = 177; // world-atlas 110m country count
 
 const PLAYER_COLORS = [
   '#7EC8E3','#A8E6CF','#FFD3B6','#FF8B94','#C3B1E1',
@@ -263,8 +359,22 @@ const PLAYER_COLORS = [
 //  STATE
 // ══════════════════════════════════════════════
 let ws = null, myId = null, myColor = null, myName = '', roomCode = null, mapKey = 'world';
-let players = {};       // id → { name, color, dot:[lon,lat]|null, territories:Set, troops }
-let territories = {};   // countryId → playerId
+
+// Players map: id → { name, color, dot, territories:Set, troops, maxTroops, gold, workerRatio }
+let players = {};
+
+// Territory ownership: countryId → playerId
+let territories = {};
+
+// Active attacks (from server): attackId → { attackerId, defenderId, territory, troops }
+let activeAttacks = new Map();
+
+// Client-local attack animations: attackId → { from:[x,y], to:[x,y], progress, color }
+let attackAnims = new Map();
+
+// Selected target territory for next attack
+let selectedTarget = null;
+
 let topoData = null, features = [], featureMap = {}, adjacency = {};
 let phase = 'loading';
 let timerLeft = PLACEMENT_SECS, timerInterval = null, myPlaced = false;
@@ -272,6 +382,10 @@ let transform = { x:0, y:0, k:1 };
 let projection = null, pathGen = null, pathGenMM = null;
 let pulseT = 0;
 let pointers = {}, isDragging = false, dragStart = {x:0,y:0}, pinchStart = null;
+
+// UI state
+let workerRatio = 0.20;  // 0-1
+let attackRatio = 0.50;  // 0-1
 
 const canvas = document.getElementById('game-canvas');
 const ctx = canvas.getContext('2d');
@@ -359,6 +473,47 @@ function buildAdjacency(world) {
 }
 
 // ══════════════════════════════════════════════
+//  TROOP FORMULA (client-side display prediction)
+//  Matches server exactly: toAdd per tick (100ms)
+// ══════════════════════════════════════════════
+function calcTroopGain(current, max) {
+  if (current >= max) return 0;
+  return (10 + Math.pow(current, 0.73) / 4) * (1 - current / max);
+}
+
+// ══════════════════════════════════════════════
+//  ENCLOSURE DETECTION
+//  Check if any unclaimed/enemy territories are
+//  fully surrounded by myId's territories
+// ══════════════════════════════════════════════
+function checkEnclosures() {
+  if (!myId || phase !== 'game') return;
+  const myTerr = players[myId]?.territories;
+  if (!myTerr || myTerr.size === 0) return;
+
+  const enclosed = [];
+  for (const f of features) {
+    const id = +f.id;
+    if (territories[id] === myId) continue; // already mine
+
+    const neighbors = adjacency[id] || new Set();
+    if (neighbors.size === 0) continue;
+
+    // Check if ALL land neighbors belong to me
+    let allMine = true;
+    for (const nid of neighbors) {
+      if (territories[nid] !== myId) { allMine = false; break; }
+    }
+    if (allMine) enclosed.push(id);
+  }
+
+  if (enclosed.length > 0) {
+    // Report to server for authoritative capture
+    send({ type: 'claim_enclosure', territories: enclosed });
+  }
+}
+
+// ══════════════════════════════════════════════
 //  DRAW LOOP
 // ══════════════════════════════════════════════
 function startLoop() {
@@ -379,37 +534,79 @@ function redraw() {
   ctx.translate(transform.x, transform.y);
   ctx.scale(transform.k, transform.k);
 
-  // Land + claimed colours
+  // ── Land fill ──
   features.forEach(f => {
-    const id = +f.id, owner = territories[id];
+    const id = +f.id;
+    const owner = territories[id];
+    const isSelected = selectedTarget === id;
+
     ctx.beginPath(); pathGen(f);
-    ctx.fillStyle = owner && players[owner] ? players[owner].color + 'AA' : 'rgba(201,168,76,0.05)';
+
+    if (isSelected) {
+      // Pulsing red highlight for attack target
+      const pulse = Math.abs(Math.sin(pulseT / 300)) * 0.3 + 0.2;
+      ctx.fillStyle = `rgba(201,76,76,${pulse})`;
+    } else if (owner && players[owner]) {
+      ctx.fillStyle = players[owner].color + 'AA';
+    } else {
+      ctx.fillStyle = 'rgba(201,168,76,0.05)';
+    }
     ctx.fill();
-    ctx.strokeStyle = 'rgba(201,168,76,0.28)';
-    ctx.lineWidth = 0.55 / transform.k;
+    ctx.strokeStyle = isSelected ? 'rgba(201,76,76,0.7)' : 'rgba(201,168,76,0.28)';
+    ctx.lineWidth = (isSelected ? 1.5 : 0.55) / transform.k;
     ctx.stroke();
   });
 
-  // Highlight claimable (game phase)
+  // ── Expandable territory highlight (my adjacent unclaimed) ──
   if (phase === 'game' && myId && players[myId]) {
     players[myId].territories.forEach(tid => {
       (adjacency[tid] || new Set()).forEach(adjId => {
-        if (!territories[adjId] && featureMap[adjId]) {
+        if (territories[adjId] !== myId && featureMap[adjId]) {
           ctx.beginPath(); pathGen(featureMap[adjId]);
-          ctx.strokeStyle = 'rgba(201,168,76,0.75)';
-          ctx.lineWidth = 1.3 / transform.k; ctx.stroke();
-          ctx.fillStyle = 'rgba(201,168,76,0.1)'; ctx.fill();
+          const isEnemy = territories[adjId] && territories[adjId] !== myId;
+          if (isEnemy) {
+            ctx.strokeStyle = 'rgba(201,76,76,0.5)';
+            ctx.fillStyle = 'rgba(201,76,76,0.06)';
+          } else {
+            ctx.strokeStyle = 'rgba(201,168,76,0.65)';
+            ctx.fillStyle = 'rgba(201,168,76,0.08)';
+          }
+          ctx.lineWidth = 1.1 / transform.k;
+          ctx.stroke(); ctx.fill();
         }
       });
     });
   }
 
-  // Graticule
+  // ── Graticule ──
   ctx.beginPath(); pathGen(d3.geoGraticule()());
   ctx.strokeStyle = 'rgba(201,168,76,0.04)';
   ctx.lineWidth = 0.4 / transform.k; ctx.stroke();
 
-  // Player dots
+  // ── Attack animations ──
+  for (const [id, anim] of attackAnims) {
+    anim.progress = Math.min(1, anim.progress + 0.025);
+    const x = anim.from[0] + (anim.to[0] - anim.from[0]) * anim.progress;
+    const y = anim.from[1] + (anim.to[1] - anim.from[1]) * anim.progress;
+
+    // Trail
+    ctx.beginPath();
+    ctx.moveTo(anim.from[0], anim.from[1]);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = anim.color + '60';
+    ctx.lineWidth = 1.5 / transform.k;
+    ctx.stroke();
+
+    // Head
+    ctx.beginPath();
+    ctx.arc(x, y, 4 / transform.k, 0, Math.PI * 2);
+    ctx.fillStyle = anim.color;
+    ctx.fill();
+
+    if (anim.progress >= 1) attackAnims.delete(id);
+  }
+
+  // ── Player dots ──
   Object.entries(players).forEach(([id, p]) => {
     if (!p.dot) return;
     const [px, py] = projection(p.dot);
@@ -431,17 +628,26 @@ function redraw() {
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 1 / transform.k; ctx.stroke();
 
-    // Pulse ring (after placed)
+    // Pulse ring
     if (myPlaced || !isMe) {
       const ringR = (baseR + 5 + Math.sin(pulseT / 600) * 3) / transform.k;
       ctx.beginPath(); ctx.arc(px, py, ringR, 0, Math.PI * 2);
       ctx.strokeStyle = p.color + '50';
       ctx.lineWidth = 1.2 / transform.k; ctx.stroke();
     }
+
+    // Troop label on dot
+    if (isMe || transform.k > 1.5) {
+      ctx.font = `${Math.max(8, 9/transform.k)}px Cinzel`;
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.fillText(fmtNum(p.troops || 0), px, py - r - 4 / transform.k);
+    }
   });
 
   ctx.restore();
   drawMinimap();
+  updateTroopBar();
 }
 
 function drawMinimap() {
@@ -454,7 +660,6 @@ function drawMinimap() {
     mmCtx.fill();
     mmCtx.strokeStyle = 'rgba(201,168,76,0.18)'; mmCtx.lineWidth = 0.3; mmCtx.stroke();
   });
-  // dots
   const mmProj = pathGenMM.projection();
   Object.values(players).forEach(p => {
     if (!p.dot) return;
@@ -462,12 +667,20 @@ function drawMinimap() {
     mmCtx.beginPath(); mmCtx.arc(px, py, 2.5, 0, Math.PI * 2);
     mmCtx.fillStyle = p.color; mmCtx.fill();
   });
-  // viewport
+  // Viewport rect
   const vx = (-transform.x / transform.k) * (150 / canvas.width);
   const vy = (-transform.y / transform.k) * (84  / canvas.height);
   const vw = 150 / transform.k, vh = 84 / transform.k;
   mmCtx.strokeStyle = 'rgba(201,168,76,0.5)'; mmCtx.lineWidth = 1;
   mmCtx.strokeRect(vx, vy, vw, vh);
+}
+
+function updateTroopBar() {
+  const me = players[myId]; if (!me) return;
+  const pct = me.maxTroops > 0 ? me.troops / me.maxTroops : 0;
+  const bar = document.getElementById('troop-bar');
+  bar.style.width = (pct * 100) + '%';
+  bar.className = 'troop-bar ' + (pct > 0.85 ? 'near-max' : pct > 0.35 && pct < 0.50 ? 'optimal' : pct < 0.15 ? 'low' : '');
 }
 
 // ══════════════════════════════════════════════
@@ -501,6 +714,13 @@ function screenToGeo(cx, cy) {
   return projection.invert([(cx - transform.x) / transform.k, (cy - transform.y) / transform.k]);
 }
 
+function featureCentroidScreen(fid) {
+  const f = featureMap[fid]; if (!f) return null;
+  const [lon, lat] = d3.geoCentroid(f);
+  const [x, y] = projection([lon, lat]);
+  return [x * transform.k + transform.x, y * transform.k + transform.y];
+}
+
 // ══════════════════════════════════════════════
 //  ZOOM / PAN
 // ══════════════════════════════════════════════
@@ -518,7 +738,7 @@ canvas.addEventListener('wheel', e => {
   applyZoom(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY);
 }, { passive: false });
 
-// ── UNIFIED POINTER EVENTS (mouse + touch + stylus) ──
+// ── UNIFIED POINTER EVENTS ──
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
@@ -548,7 +768,6 @@ canvas.addEventListener('pointermove', e => {
     const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
     const scale = dist / pinchStart.dist;
     const newK = Math.min(Math.max(pinchStart.tk * scale, 0.45), 22);
-    // Pan follows midpoint movement too
     const mdx = cx - pinchStart.cx, mdy = cy - pinchStart.cy;
     transform.x = pinchStart.tx * (newK / pinchStart.tk) + mdx + cx * (1 - newK / pinchStart.tk);
     transform.y = pinchStart.ty * (newK / pinchStart.tk) + mdy + cy * (1 - newK / pinchStart.tk);
@@ -567,13 +786,9 @@ canvas.addEventListener('pointermove', e => {
       hidePlayerTooltip();
       return;
     }
-    // Hover — only player dots
     const pid = playerDotAt(e.clientX, e.clientY);
-    if (pid && pid !== myId) {
-      showPlayerTooltip(pid, e.clientX, e.clientY);
-    } else {
-      hidePlayerTooltip();
-    }
+    if (pid && pid !== myId) showPlayerTooltip(pid, e.clientX, e.clientY);
+    else hidePlayerTooltip();
   }
 });
 
@@ -608,14 +823,99 @@ function handleClick(cx, cy) {
 
   } else if (phase === 'game') {
     const f = featureAt(cx, cy);
-    if (!f) return;
+    if (!f) { clearTarget(); return; }
     const id = +f.id;
-    if (territories[id]) return; // already claimed
+    const owner = territories[id];
+
+    if (owner === myId) {
+      // Clicking own territory clears selection
+      clearTarget();
+      return;
+    }
+
+    // Must be adjacent to my territory
     const myTerr = players[myId]?.territories || new Set();
-    let canClaim = false;
-    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(id)) canClaim = true; });
-    if (!canClaim) { toast('Expand from your existing territory', 'error', 1800); return; }
-    send({ type: 'claim_territory', territory: id });
+    let canAttack = false;
+    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(id)) canAttack = true; });
+
+    if (!canAttack) {
+      toast('Not adjacent to your territory', 'error', 1800);
+      clearTarget();
+      return;
+    }
+
+    // Select this target
+    selectedTarget = id;
+    const btn = document.getElementById('attack-btn');
+    const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
+    btn.disabled = false;
+    btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
+    btn.className = 'attack-btn active';
+  }
+}
+
+function clearTarget() {
+  selectedTarget = null;
+  const btn = document.getElementById('attack-btn');
+  btn.disabled = true;
+  btn.textContent = 'Select a territory to attack';
+  btn.className = '';
+}
+
+// ══════════════════════════════════════════════
+//  ATTACK
+// ══════════════════════════════════════════════
+function launchAttack() {
+  if (!selectedTarget || phase !== 'game') return;
+  const me = players[myId];
+  if (!me || me.troops < 10) { toast('Not enough troops', 'error'); return; }
+
+  send({ type: 'attack', territory: selectedTarget, attackRatio });
+
+  // Spawn local animation
+  const myTerr = me.territories;
+  let closestAdj = null, minDist = Infinity;
+  myTerr.forEach(tid => {
+    if ((adjacency[tid] || new Set()).has(selectedTarget)) {
+      const c = featureCentroidScreen(tid);
+      if (!c) return;
+      const d = Math.hypot(c[0] - canvas.width/2, c[1] - canvas.height/2);
+      if (d < minDist) { minDist = d; closestAdj = tid; }
+    }
+  });
+
+  const fromC = closestAdj ? featureCentroidScreen(closestAdj) : null;
+  const toC = featureCentroidScreen(selectedTarget);
+  if (fromC && toC) {
+    const animId = Date.now();
+    attackAnims.set(animId, {
+      from: [(fromC[0] - transform.x)/transform.k, (fromC[1] - transform.y)/transform.k],
+      to:   [(toC[0]  - transform.x)/transform.k, (toC[1]  - transform.y)/transform.k],
+      progress: 0,
+      color: me.color,
+    });
+  }
+
+  toast(`Attack launched! (${Math.round(attackRatio*100)}%)`, 'info', 1500);
+  clearTarget();
+}
+
+// ══════════════════════════════════════════════
+//  SLIDER HANDLERS
+// ══════════════════════════════════════════════
+function onWorkerSlider(val) {
+  workerRatio = val / 100;
+  document.getElementById('worker-pct').textContent = val + '%';
+  send({ type: 'set_worker_ratio', ratio: workerRatio });
+}
+
+function onAttackSlider(val) {
+  attackRatio = val / 100;
+  document.getElementById('attack-pct').textContent = val + '%';
+  if (selectedTarget !== null) {
+    const owner = territories[selectedTarget];
+    const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
+    document.getElementById('attack-btn').textContent = `Attack ${ownerName} (${val}% troops)`;
   }
 }
 
@@ -655,9 +955,30 @@ function endPlacement() {
     toast('Base placed randomly', 'info', 2500);
   }
   document.getElementById('placement-overlay').style.display = 'none';
-  document.getElementById('phase-label').textContent = 'Campaign — click gold-bordered territories to expand';
+  document.getElementById('phase-label').textContent = 'Campaign — click enemy/empty territory to attack';
   phase = 'game';
   toast('Expand your empire!', 'success', 3000);
+
+  // Start checking for enclosures
+  setInterval(checkEnclosures, 2000);
+}
+
+// ══════════════════════════════════════════════
+//  VICTORY CHECK
+// ══════════════════════════════════════════════
+function checkVictory() {
+  const total = features.length;
+  for (const [pid, p] of Object.entries(players)) {
+    const pct = p.territories.size / total;
+    if (pct >= WIN_PCT) {
+      const name = p.name;
+      document.getElementById('victory-sub').textContent =
+        pid === myId
+          ? `You have conquered ${Math.round(pct*100)}% of the world.`
+          : `${name} has dominated ${Math.round(pct*100)}% of the world.`;
+      document.getElementById('victory-overlay').classList.add('show');
+    }
+  }
 }
 
 // ══════════════════════════════════════════════
@@ -666,11 +987,13 @@ function endPlacement() {
 const ptt = document.getElementById('player-tooltip');
 function showPlayerTooltip(id, cx, cy) {
   const p = players[id]; if (!p) return;
+  const pct = features.length > 0 ? ((p.territories.size / features.length) * 100).toFixed(1) : 0;
   document.getElementById('ptt-name').textContent        = p.name;
-  document.getElementById('ptt-troops').textContent      = p.troops || 0;
+  document.getElementById('ptt-troops').textContent      = fmtNum(p.troops || 0);
   document.getElementById('ptt-territories').textContent = p.territories.size;
+  document.getElementById('ptt-pct').textContent         = pct + '%';
   ptt.style.left = cx + 'px';
-  ptt.style.top  = (cy - 105) + 'px';
+  ptt.style.top  = (cy - 125) + 'px';
   ptt.classList.add('visible');
 }
 function hidePlayerTooltip() { ptt.classList.remove('visible'); }
@@ -681,7 +1004,7 @@ function hidePlayerTooltip() { ptt.classList.remove('visible'); }
 function connectWS(code, username) {
   ws = new WebSocket(`${SERVER_WS}/room/${code}`);
   ws.addEventListener('open', () => {
-    send({ type: 'join', username, isHost: false, settings: { map: mapKey } });
+    send({ type: 'join', username, color: myColor, isHost: false, settings: { map: mapKey } });
   });
   ws.addEventListener('message', e => {
     try { handleMsg(JSON.parse(e.data)); } catch(err) { console.warn(err); }
@@ -696,55 +1019,152 @@ function send(obj) {
 
 function handleMsg(msg) {
   switch (msg.type) {
+
     case 'welcome':
       myId = msg.id;
       myColor = PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length];
-      if (!players[myId]) players[myId] = { name: myName, color: myColor, dot: null, territories: new Set(), troops: 10 };
+      if (!players[myId]) players[myId] = {
+        name: myName, color: myColor, dot: null,
+        territories: new Set(), troops: 50, maxTroops: 1000, gold: 0, workerRatio: 0.2,
+      };
+      document.getElementById('self-dot').style.background = myColor;
       updateSelfCard();
       startPlacementTimer();
       break;
 
     case 'playerList':
       msg.players.forEach((p, i) => {
-        if (!players[p.id]) players[p.id] = { name: p.name, color: PLAYER_COLORS[i % PLAYER_COLORS.length], dot: null, territories: new Set(), troops: 10 };
+        if (!players[p.id]) players[p.id] = {
+          name: p.name, color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+          dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+        };
       });
       updateScoreboard(); updateHUD(); break;
 
     case 'playerJoined':
       if (!players[msg.player.id]) {
         const idx = Object.keys(players).length;
-        players[msg.player.id] = { name: msg.player.name, color: PLAYER_COLORS[idx % PLAYER_COLORS.length], dot: null, territories: new Set(), troops: 10 };
+        players[msg.player.id] = {
+          name: msg.player.name, color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+          dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+        };
         toast(`${msg.player.name} joined`, 'info');
         updateScoreboard(); updateHUD();
       }
       break;
 
     case 'playerLeft':
-      if (players[msg.id]) { toast(`${players[msg.id].name} left`, 'info'); delete players[msg.id]; updateScoreboard(); updateHUD(); }
+      if (players[msg.id]) {
+        const name = players[msg.id].name;
+        // Release their territories
+        for (const [tid, owner] of Object.entries(territories)) {
+          if (owner === msg.id) delete territories[tid];
+        }
+        players[msg.id].territories.clear();
+        delete players[msg.id];
+        toast(`${name} left`, 'info');
+        updateScoreboard(); updateHUD();
+      }
       break;
 
-    case 'territory_claimed':
-      claimTerritory(msg.territory, msg.playerId); break;
+    // Server tick update: authoritative troop counts
+    case 'state_update':
+      msg.players.forEach(p => {
+        if (!players[p.id]) return;
+        players[p.id].troops    = p.troops;
+        players[p.id].maxTroops = p.maxTroops;
+        players[p.id].gold      = p.gold;
+      });
+      document.getElementById('hud-turn').textContent = msg.tick;
+      updateSelfCard();
+      updateScoreboard();
+      break;
 
-    case 'turn_change':
-      document.getElementById('hud-turn').textContent = msg.turn + 1; break;
+    // Another player placed their dot
+    case 'dot_placed':
+      if (players[msg.playerId]) {
+        players[msg.playerId].dot = msg.geo;
+      }
+      if (msg.countryId !== undefined) {
+        const prev = territories[msg.countryId];
+        if (prev && players[prev]) players[prev].territories.delete(msg.countryId);
+        territories[msg.countryId] = msg.playerId;
+        if (players[msg.playerId]) players[msg.playerId].territories.add(msg.countryId);
+      }
+      break;
+
+    // Server confirmed territory capture (from attack)
+    case 'territory_captured':
+      captureTerritory(msg.territory, msg.attackerId, msg.defenderId);
+      checkVictory();
+      break;
+
+    // Enclosure instant capture
+    case 'enclosure_claimed':
+      (msg.territories || []).forEach(tid => {
+        captureTerritory(tid, msg.playerId, territories[tid]);
+      });
+      if (msg.playerId === myId && msg.territories?.length) {
+        toast(`Enclosure! +${msg.territories.length} territories`, 'success', 2500);
+      }
+      checkVictory();
+      break;
+
+    case 'attack_start': {
+      activeAttacks.set(msg.attackId, msg);
+      // Spawn animation for other players' attacks too
+      if (msg.attackerId !== myId) {
+        const fromC = featureCentroidScreen(
+          // find any of their territories adjacent to target
+          (() => {
+            if (!players[msg.attackerId]) return null;
+            for (const tid of players[msg.attackerId].territories) {
+              if ((adjacency[tid] || new Set()).has(msg.territory)) return tid;
+            }
+            return null;
+          })()
+        );
+        const toC = featureCentroidScreen(msg.territory);
+        if (fromC && toC && players[msg.attackerId]) {
+          attackAnims.set(msg.attackId, {
+            from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
+            to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
+            progress: 0,
+            color: players[msg.attackerId].color,
+          });
+        }
+      }
+      break;
+    }
+
+    case 'attack_end':
+      activeAttacks.delete(msg.attackId);
+      attackAnims.delete(msg.attackId);
+      break;
+
+    // Legacy territory_claimed (placement)
+    case 'territory_claimed':
+      captureTerritory(msg.territory, msg.playerId, null);
+      break;
 
     case 'pong': break;
 
     default:
-      // Server broadcasts place_dot from other players
       if (msg.from && msg.geo && players[msg.from]) {
         players[msg.from].dot = msg.geo;
       }
   }
 }
 
-function claimTerritory(id, playerId) {
-  const prev = territories[id];
+function captureTerritory(id, newOwner, prevOwner) {
+  // Remove from previous owner
+  const prev = prevOwner || territories[id];
   if (prev && players[prev]) players[prev].territories.delete(+id);
-  territories[id] = playerId;
-  if (players[playerId]) players[playerId].territories.add(+id);
-  updateScoreboard(); updateSelfCard();
+  // Assign to new owner
+  territories[id] = newOwner;
+  if (players[newOwner]) players[newOwner].territories.add(+id);
+  updateScoreboard();
+  updateSelfCard();
 }
 
 // ══════════════════════════════════════════════
@@ -754,21 +1174,31 @@ function updateSelfCard() {
   const me = players[myId]; if (!me) return;
   document.getElementById('self-name').textContent        = me.name;
   document.getElementById('self-territories').textContent = me.territories.size;
-  document.getElementById('self-troops').textContent      = me.troops || 0;
+  document.getElementById('self-troops').textContent      = fmtNum(Math.floor(me.troops || 0));
+  document.getElementById('self-max').textContent         = fmtNum(me.maxTroops || 0);
+  document.getElementById('hud-gold').textContent         = fmtNum(Math.floor(me.gold || 0));
   document.getElementById('self-dot').style.background    = me.color;
 }
+
 function updateScoreboard() {
   const list = document.getElementById('score-list');
   list.innerHTML = '';
+  const total = features.length || 1;
   Object.entries(players)
     .sort((a,b) => b[1].territories.size - a[1].territories.size)
     .forEach(([id, p]) => {
+      const pct = ((p.territories.size / total) * 100).toFixed(1);
       const row = document.createElement('div');
       row.className = 'score-row';
-      row.innerHTML = `<div class="score-dot" style="background:${p.color}"></div><span class="score-name">${escHtml(p.name)}${id===myId?' <span style="color:var(--text-muted);font-size:11px">(you)</span>':''}</span><span class="score-val">${p.territories.size}</span>`;
+      row.innerHTML = `
+        <div class="score-dot" style="background:${p.color}"></div>
+        <span class="score-name">${escHtml(p.name)}${id===myId?' <span style="color:var(--text-muted);font-size:11px">(you)</span>':''}</span>
+        <span class="score-val">${pct}% · ${fmtNum(Math.floor(p.troops||0))}</span>
+      `;
       list.appendChild(row);
     });
 }
+
 function updateHUD() {
   document.getElementById('hud-players').textContent = Object.keys(players).length;
   document.getElementById('hud-map').textContent = mapKey.charAt(0).toUpperCase() + mapKey.slice(1);
@@ -783,8 +1213,18 @@ function toast(msg, type='info', dur=3000) {
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), dur);
 }
+
+function fmtNum(n) {
+  if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n/1_000).toFixed(1) + 'K';
+  return String(Math.floor(n));
+}
+
 function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) send({ type:'ping', t:Date.now() }); }, 15000);
+
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN) send({ type:'ping', t:Date.now() });
+}, 15000);
 
 // ══════════════════════════════════════════════
 //  BOOT
@@ -792,6 +1232,7 @@ setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) send({ type:'pin
 async function boot() {
   const params = getParams();
   roomCode = params.room; mapKey = params.map; myName = params.username;
+  myColor = PLAYER_COLORS[0]; // will be reassigned on welcome
   document.getElementById('hud-map').textContent = mapKey.charAt(0).toUpperCase() + mapKey.slice(1);
   resize();
   await loadMap();
