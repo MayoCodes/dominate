@@ -131,13 +131,9 @@
   /* ATTACK BUTTON */
   #attack-btn {
     font-family: 'Cinzel', serif; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
-    padding: 7px 14px; border: 1px solid rgba(201,76,76,0.5); color: var(--red);
-    background: rgba(201,76,76,0.08); cursor: pointer; width: 100%;
-    transition: background 0.15s, border-color 0.15s;
+    padding: 7px 14px; border: 1px solid rgba(201,76,76,0.3); color: var(--text-muted);
+    background: rgba(0,0,0,0.4); cursor: default; width: 100%;
   }
-  #attack-btn:hover:not(:disabled) { background: rgba(201,76,76,0.18); border-color: rgba(201,76,76,0.8); }
-  #attack-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-  #attack-btn.active { background: rgba(201,76,76,0.25); border-color: var(--red); }
 
   /* TROOP BAR */
   .troop-bar-wrap { width: 100%; height: 3px; background: rgba(201,168,76,0.1); border-radius: 2px; overflow: hidden; }
@@ -211,10 +207,6 @@
   .toast.success { border-color: rgba(76,170,110,0.4); color: var(--green); background: rgba(0,0,0,0.9); }
   .toast.error   { border-color: rgba(201,76,76,0.4);  color: var(--red);   background: rgba(0,0,0,0.9); }
 
-  /* ATTACK FLASH */
-  @keyframes captureFlash { 0%{opacity:0.8} 100%{opacity:0} }
-  .capture-flash { animation: captureFlash 0.5s ease-out forwards; }
-
   @keyframes toastIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
 
   /* VICTORY OVERLAY */
@@ -276,7 +268,7 @@
   <div class="ptt-inner">
     <span class="ptt-name" id="ptt-name">—</span>
     <div class="ptt-row"><span>Troops</span><strong id="ptt-troops">0</strong></div>
-    <div class="ptt-row"><span>Territories</span><strong id="ptt-territories">0</strong></div>
+    <div class="ptt-row"><span>Tiles</span><strong id="ptt-territories">0</strong></div>
     <div class="ptt-row"><span>Land %</span><strong id="ptt-pct">0%</strong></div>
   </div>
 </div>
@@ -289,32 +281,28 @@
         <div class="self-name" id="self-name">Commander</div>
         <div class="self-stat">
           Troops: <strong id="self-troops">0</strong>/<strong id="self-max">1000</strong>
-          · Territories: <strong id="self-territories">0</strong>
+          · Tiles: <strong id="self-territories">0</strong>
         </div>
       </div>
     </div>
 
-    <!-- Troop fill bar (green at ~42% = optimal) -->
     <div class="troop-bar-wrap">
       <div class="troop-bar" id="troop-bar" style="width:5%"></div>
     </div>
 
-    <!-- Worker ratio slider -->
     <div class="slider-row">
       <div class="slider-label">Workers <span id="worker-pct">20%</span></div>
       <input type="range" id="worker-slider" min="0" max="100" value="20"
         oninput="onWorkerSlider(this.value)">
     </div>
 
-    <!-- Attack ratio slider -->
     <div class="slider-row">
       <div class="slider-label">Attack Ratio <span id="attack-pct">50%</span></div>
       <input type="range" class="attack-slider" id="attack-slider" min="1" max="100" value="50"
         oninput="onAttackSlider(this.value)">
     </div>
 
-    <!-- Attack button (shown when a target is selected) -->
-    <button id="attack-btn" disabled onclick="launchAttack()">Select a territory to attack</button>
+    <button id="attack-btn">Click territory to expand</button>
   </div>
 
   <div id="scoreboard">
@@ -343,11 +331,10 @@
 // ══════════════════════════════════════════════
 //  CONFIG
 // ══════════════════════════════════════════════
-const SERVER_WS = 'wss://dominate-server.maiyo-studios.workers.dev';
+const SERVER_WS      = 'wss://dominate-server.maiyo-studios.workers.dev';
 const PLACEMENT_SECS = 20;
-const CIRC = 2 * Math.PI * 27;
-const WIN_PCT = 0.80; // 80% of territories to win
-const TOTAL_COUNTRIES = 177; // world-atlas 110m country count
+const CIRC           = 2 * Math.PI * 27;
+const WIN_PCT        = 0.80;
 
 const PLAYER_COLORS = [
   '#7EC8E3','#A8E6CF','#FFD3B6','#FF8B94','#C3B1E1',
@@ -356,26 +343,35 @@ const PLAYER_COLORS = [
 ];
 
 // ══════════════════════════════════════════════
-//  STATE
+//  PIXEL GRID  — this IS the game world
+//  (map polygons are just border decoration)
+// ══════════════════════════════════════════════
+const GRID_W = 1200, GRID_H = 600;
+let gridLand  = null;  // Uint8Array  [GRID_W*GRID_H]  1=land 0=water
+let gridOwner = null;  // Uint32Array [GRID_W*GRID_H]  0=unclaimed, else playerIdx
+
+// Player index maps
+let playerIdx  = {};   // playerId  → 1-based index
+let idxPlayer  = {};   // index     → playerId
+let nextIdx    = 1;
+
+// Per-player color cache
+let pidxRgb = {};
+
+// ══════════════════════════════════════════════
+//  SERVER / COUNTRY-LEVEL STATE
 // ══════════════════════════════════════════════
 let ws = null, myId = null, myColor = null, myName = '', roomCode = null, mapKey = 'world';
 
-// Players map: id → { name, color, dot, territories:Set, troops, maxTroops, gold, workerRatio }
+// Players: id → { name, color, troops, maxTroops, gold, dot, territories:Set }
 let players = {};
-
-// Territory ownership: countryId → playerId
+// Country-level ownership (for server protocol)
 let territories = {};
-
-// Active attacks (from server): attackId → { attackerId, defenderId, territory, troops }
 let activeAttacks = new Map();
 
-// Client-local attack animations: attackId → { from:[x,y], to:[x,y], progress, color }
-let attackAnims = new Map();
-
-// Selected target territory for next attack
-let selectedTarget = null;
-
 let topoData = null, features = [], featureMap = {}, adjacency = {};
+let cellCountry = null;  // Uint16Array  cell → country id
+
 let phase = 'loading';
 let timerLeft = PLACEMENT_SECS, timerInterval = null, myPlaced = false;
 let transform = { x:0, y:0, k:1 };
@@ -383,14 +379,13 @@ let projection = null, pathGen = null, pathGenMM = null;
 let pulseT = 0;
 let pointers = {}, isDragging = false, dragStart = {x:0,y:0}, pinchStart = null;
 
-// UI state
-let workerRatio = 0.20;  // 0-1
-let attackRatio = 0.50;  // 0-1
+let workerRatio = 0.20;
+let attackRatio = 0.50;
 
-const canvas = document.getElementById('game-canvas');
-const ctx = canvas.getContext('2d');
+const canvas   = document.getElementById('game-canvas');
+const ctx      = canvas.getContext('2d');
 const mmCanvas = document.getElementById('minimap-canvas');
-const mmCtx = mmCanvas.getContext('2d');
+const mmCtx    = mmCanvas.getContext('2d');
 
 // ══════════════════════════════════════════════
 //  PARAMS
@@ -421,7 +416,7 @@ function hideLoading() {
 //  RESIZE + PROJECTION
 // ══════════════════════════════════════════════
 function resize() {
-  canvas.width = window.innerWidth;
+  canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
   mmCanvas.width = 150; mmCanvas.height = 84;
   if (topoData) buildProjection();
@@ -445,123 +440,273 @@ async function loadMap() {
   setLoad(20, 'Fetching map data…');
   const world = await d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
   topoData = world;
-  setLoad(50, 'Parsing territories…');
+
+  setLoad(40, 'Parsing territories…');
   features = topojson.feature(world, world.objects.countries).features;
   featureMap = {};
   features.forEach(f => { featureMap[+f.id] = f; });
   buildProjection(); resize();
-  setLoad(75, 'Rasterizing map grid…');
-  rasterizeGrid();  // builds adjacency from actual pixel data
+
+  setLoad(55, 'Rasterizing pixel grid…');
+  rasterizeGrid();
+
+  setLoad(72, 'Building country cell map…');
+  buildCellCountryMap();
+
+  setLoad(85, 'Building adjacency…');
+  buildAdjacency(world);
+
   setLoad(100, 'Ready.');
   setTimeout(hideLoading, 350);
 }
 
-// ══════════════════════════════════════════════
-//  PIXEL GRID  (OpenFront-style)
-//  Render every country as a unique color into
-//  a hidden canvas, read pixels back, build:
-//    pixelCountry[] — pixel → countryId
-//    countryPixels{} — countryId → Set<pixelIdx>
-//    adjacency{} — derived from touching pixels
-//  This is exactly how OpenFront knows the map.
-// ══════════════════════════════════════════════
-const GRID_W = 960, GRID_H = 540;
-let pixelCountry = null;   // Uint16Array, 0 = water
-let countryPixels = {};    // countryId → Set of pixel indices
-
+// Rasterize world into GRID_W×GRID_H.
+// gridLand[i] = 1 if land, 0 if water.
 function rasterizeGrid() {
   const off = document.createElement('canvas');
   off.width = GRID_W; off.height = GRID_H;
-  const oc = off.getContext('2d', { willReadFrequently: true });
+  const oc  = off.getContext('2d', { willReadFrequently: true });
 
-  const offProj = d3.geoNaturalEarth1()
+  const gProj = d3.geoNaturalEarth1()
     .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
     .translate([GRID_W / 2, GRID_H / 2.1]);
-  const offPath = d3.geoPath(offProj, oc);
+  const gPath = d3.geoPath(gProj, oc);
 
-  // Draw each feature as a unique packed-int color (index+1, skip 0=background)
+  oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
+  oc.fillStyle = '#fff';
+  features.forEach(f => { oc.beginPath(); gPath(f); oc.fill(); });
+
+  const data = oc.getImageData(0, 0, GRID_W, GRID_H).data;
+  gridLand  = new Uint8Array(GRID_W * GRID_H);
+  gridOwner = new Uint32Array(GRID_W * GRID_H);
+
+  for (let i = 0; i < GRID_W * GRID_H; i++) {
+    gridLand[i] = data[i * 4] > 128 ? 1 : 0;
+  }
+  console.log('[GRID] rasterized', GRID_W * GRID_H, 'tiles');
+}
+
+// Build cellCountry: each grid cell → country id (for server protocol)
+function buildCellCountryMap() {
+  const off = document.createElement('canvas');
+  off.width = GRID_W; off.height = GRID_H;
+  const oc  = off.getContext('2d', { willReadFrequently: true });
+
+  const gProj = d3.geoNaturalEarth1()
+    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
+    .translate([GRID_W / 2, GRID_H / 2.1]);
+  const gPath = d3.geoPath(gProj, oc);
+
   oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
   features.forEach((f, i) => {
     const n = i + 1;
-    oc.fillStyle = `rgb(${(n>>16)&0xff},${(n>>8)&0xff},${n&0xff})`;
-    oc.beginPath(); offPath(f); oc.fill();
+    oc.fillStyle = `rgb(${(n >> 16) & 0xff},${(n >> 8) & 0xff},${n & 0xff})`;
+    oc.beginPath(); gPath(f); oc.fill();
   });
 
   const data = oc.getImageData(0, 0, GRID_W, GRID_H).data;
-  pixelCountry = new Uint16Array(GRID_W * GRID_H);
-  countryPixels = {};
-  features.forEach(f => { countryPixels[+f.id] = new Set(); });
-
+  cellCountry = new Uint16Array(GRID_W * GRID_H);
   for (let i = 0; i < GRID_W * GRID_H; i++) {
     const n = (data[i*4] << 16) | (data[i*4+1] << 8) | data[i*4+2];
     if (n === 0) continue;
     const fi = n - 1;
-    if (fi < features.length) {
-      const cid = +features[fi].id;
-      pixelCountry[i] = cid;
-      countryPixels[cid].add(i);
-    }
+    if (fi < features.length) cellCountry[i] = +features[fi].id;
   }
+}
 
-  // Build adjacency from pixel neighbors (4-connected)
+// Country-level adjacency (for server protocol)
+function buildAdjacency(world) {
   adjacency = {};
   features.forEach(f => { adjacency[+f.id] = new Set(); });
-  for (let y = 0; y < GRID_H; y++) {
-    for (let x = 0; x < GRID_W; x++) {
-      const idx = y * GRID_W + x;
-      const a = pixelCountry[idx]; if (!a) continue;
-      if (x+1 < GRID_W) {
-        const b = pixelCountry[idx+1];
-        if (b && b !== a) { adjacency[a].add(b); adjacency[b].add(a); }
-      }
-      if (y+1 < GRID_H) {
-        const b = pixelCountry[idx+GRID_W];
-        if (b && b !== a) { adjacency[a].add(b); adjacency[b].add(a); }
-      }
+  topojson.mesh(world, world.objects.countries, (a, b) => {
+    if (a !== b) {
+      const aid = +a.id, bid = +b.id;
+      adjacency[aid] = adjacency[aid] || new Set();
+      adjacency[bid] = adjacency[bid] || new Set();
+      adjacency[aid].add(bid);
+      adjacency[bid].add(aid);
     }
-  }
-  console.log('[DOMINATE] pixel grid built:', GRID_W*GRID_H, 'pixels,', features.length, 'countries');
+    return false;
+  });
+}
+
+function cellToCountry(idx) {
+  if (!cellCountry) return null;
+  return cellCountry[idx] || null;
 }
 
 // ══════════════════════════════════════════════
-//  TROOP FORMULA (client-side display prediction)
-//  Matches server exactly: toAdd per tick (100ms)
+//  GRID HELPERS
 // ══════════════════════════════════════════════
-function calcTroopGain(current, max) {
-  if (current >= max) return 0;
-  return (10 + Math.pow(current, 0.73) / 4) * (1 - current / max);
+function screenToCell(sx, sy) {
+  const gx = Math.floor(((sx - transform.x) / transform.k) / canvas.width  * GRID_W);
+  const gy = Math.floor(((sy - transform.y) / transform.k) / canvas.height * GRID_H);
+  if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
+  return gy * GRID_W + gx;
+}
+
+function cellToScreen(idx) {
+  const gx = idx % GRID_W, gy = Math.floor(idx / GRID_W);
+  return [
+    (gx + 0.5) / GRID_W * canvas.width  * transform.k + transform.x,
+    (gy + 0.5) / GRID_H * canvas.height * transform.k + transform.y,
+  ];
+}
+
+function cellNeighbors(idx) {
+  const x = idx % GRID_W, y = Math.floor(idx / GRID_W);
+  const out = [];
+  if (x > 0)          out.push(idx - 1);
+  if (x < GRID_W - 1) out.push(idx + 1);
+  if (y > 0)          out.push(idx - GRID_W);
+  if (y < GRID_H - 1) out.push(idx + GRID_W);
+  return out;
+}
+
+function getPlayerIdx(pid) {
+  if (!(pid in playerIdx)) {
+    playerIdx[pid] = nextIdx;
+    idxPlayer[nextIdx] = pid;
+    nextIdx++;
+    pidxRgb[playerIdx[pid]] = null; // clear cache
+  }
+  return playerIdx[pid];
+}
+
+function getPidxRgb(pidx) {
+  if (pidxRgb[pidx]) return pidxRgb[pidx];
+  const pid = idxPlayer[pidx];
+  if (!pid || !players[pid]) return null;
+  const c = players[pid].color;
+  pidxRgb[pidx] = [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
+  return pidxRgb[pidx];
+}
+
+function claimTile(idx, pid) {
+  gridOwner[idx] = getPlayerIdx(pid);
+}
+
+// Seed a diamond of land tiles around startIdx for initial placement
+function seedPlayerTiles(startIdx, pid, radius) {
+  const cx = startIdx % GRID_W, cy = Math.floor(startIdx / GRID_W);
+  const pidx = getPlayerIdx(pid);
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (Math.abs(dx) + Math.abs(dy) > radius) continue;
+      const nx = cx + dx, ny = cy + dy;
+      if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) continue;
+      const ni = ny * GRID_W + nx;
+      if (gridLand[ni]) gridOwner[ni] = pidx;
+    }
+  }
+}
+
+// Count tiles owned by a player
+function countMyTiles() {
+  if (!myId) return 0;
+  const pidx = playerIdx[myId];
+  if (!pidx) return 0;
+  let n = 0;
+  for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) n++;
+  return n;
 }
 
 // ══════════════════════════════════════════════
-//  ENCLOSURE DETECTION
-//  Check if any unclaimed/enemy territories are
-//  fully surrounded by myId's territories
+//  FLOOD EXPANSION  (OpenFront-style)
+//  BFS backward from target → our border tiles
+//  then replay path forward, capturing 1 tile/tick
 // ══════════════════════════════════════════════
-function checkEnclosures() {
-  if (!myId || phase !== 'game') return;
-  const myTerr = players[myId]?.territories;
-  if (!myTerr || myTerr.size === 0) return;
+let floodActive   = false;
+let floodFrontier = [];
+let floodInterval = null;
 
-  const enclosed = [];
-  for (const f of features) {
-    const id = +f.id;
-    if (territories[id] === myId) continue; // already mine
+function cancelFlood() {
+  floodActive = false;
+  floodFrontier = [];
+  if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
+}
 
-    const neighbors = adjacency[id] || new Set();
-    if (neighbors.size === 0) continue;
+// BFS backward from targetIdx through land to find path from our border
+function bfsPathToTarget(targetIdx) {
+  const myPidx = playerIdx[myId];
+  if (!myPidx || !gridLand[targetIdx]) return null;
 
-    // Check if ALL land neighbors belong to me
-    let allMine = true;
-    for (const nid of neighbors) {
-      if (territories[nid] !== myId) { allMine = false; break; }
+  // Already ours
+  if (gridOwner[targetIdx] === myPidx) return null;
+
+  const size  = GRID_W * GRID_H;
+  const parent = new Int32Array(size).fill(-2); // -2 = unvisited
+  const queue  = [targetIdx];
+  parent[targetIdx] = -1;
+  let head = 0;
+
+  while (head < queue.length) {
+    const cur = queue[head++];
+    for (const n of cellNeighbors(cur)) {
+      if (parent[n] !== -2) continue;
+      if (!gridLand[n]) continue;
+      parent[n] = cur;
+      if (gridOwner[n] === myPidx) {
+        // Reconstruct path from targetIdx back to n (which we own)
+        const path = [];
+        let c = targetIdx;
+        while (c !== n) {
+          path.unshift(c);
+          c = parent[c];
+          if (c < 0) break;
+        }
+        return path;
+      }
+      queue.push(n);
     }
-    if (allMine) enclosed.push(id);
+  }
+  return null;
+}
+
+function startFloodToCell(targetIdx) {
+  cancelFlood();
+  const path = bfsPathToTarget(targetIdx);
+  if (!path || path.length === 0) {
+    if (!gridLand[targetIdx]) {
+      toast('Cannot expand into ocean', 'error', 1800);
+    } else {
+      toast('Unreachable — separated by water', 'error', 1800);
+    }
+    return;
   }
 
-  if (enclosed.length > 0) {
-    // Report to server for authoritative capture
-    send({ type: 'claim_enclosure', territories: enclosed });
+  floodActive   = true;
+  floodFrontier = path;
+  toast(`Expanding ${path.length} tile${path.length > 1 ? 's' : ''}…`, 'info', 1500);
+
+  // Fire one tile per ~33ms (≈30 tiles/sec) — OpenFront pacing
+  floodInterval = setInterval(floodTick, 33);
+  floodTick();
+}
+
+function floodTick() {
+  if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
+  const myPidx = getPlayerIdx(myId);
+
+  const tileIdx = floodFrontier.shift();
+  if (tileIdx === undefined) { cancelFlood(); return; }
+
+  // Skip if somehow already ours
+  if (gridOwner[tileIdx] === myPidx) { floodTick(); return; }
+
+  // Claim locally (immediate visual feedback)
+  claimTile(tileIdx, myId);
+
+  // Report to server (country-level)
+  const cid = cellToCountry(tileIdx);
+  if (cid) {
+    territories[cid] = myId;
+    if (players[myId]) players[myId].territories.add(cid);
+    send({ type: 'attack', territory: cid, attackRatio });
   }
+
+  updateSelfCard();
+  if (floodFrontier.length === 0) cancelFlood();
 }
 
 // ══════════════════════════════════════════════
@@ -575,87 +720,90 @@ function startLoop() {
   })(0);
 }
 
+// Persistent offscreen canvas for the pixel grid
+let _gridOff = null, _gridOffCtx = null, _gridImg = null;
+
+function ensureGridOffscreen() {
+  if (!_gridOff) {
+    _gridOff = document.createElement('canvas');
+    _gridOff.width  = GRID_W;
+    _gridOff.height = GRID_H;
+    _gridOffCtx = _gridOff.getContext('2d');
+    _gridImg = new ImageData(GRID_W, GRID_H);
+  }
+}
+
+function drawGrid() {
+  if (!gridLand || !gridOwner) return;
+  ensureGridOffscreen();
+
+  const d = _gridImg.data;
+  for (let i = 0; i < GRID_W * GRID_H; i++) {
+    const pi    = i * 4;
+    const land  = gridLand[i];
+    const owner = gridOwner[i];
+
+    if (!land) {
+      // Water — deep navy
+      d[pi]   = 8;
+      d[pi+1] = 14;
+      d[pi+2] = 30;
+      d[pi+3] = 255;
+    } else if (!owner) {
+      // Unclaimed land — dark olive
+      d[pi]   = 26;
+      d[pi+1] = 26;
+      d[pi+2] = 16;
+      d[pi+3] = 255;
+    } else {
+      const rgb = getPidxRgb(owner);
+      if (rgb) {
+        d[pi]   = rgb[0];
+        d[pi+1] = rgb[1];
+        d[pi+2] = rgb[2];
+        d[pi+3] = 210;
+      } else {
+        d[pi] = d[pi+1] = d[pi+2] = 70;
+        d[pi+3] = 255;
+      }
+    }
+  }
+
+  _gridOffCtx.putImageData(_gridImg, 0, 0);
+
+  // Scale to canvas with current pan/zoom — crisp pixel blocks
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(_gridOff, transform.x, transform.y,
+    canvas.width  * transform.k,
+    canvas.height * transform.k);
+}
+
 function redraw() {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#000';
+  ctx.fillStyle = '#080e1e';
   ctx.fillRect(0, 0, w, h);
+
+  // ── Pixel grid (the actual territory state) ──
+  drawGrid();
 
   ctx.save();
   ctx.translate(transform.x, transform.y);
   ctx.scale(transform.k, transform.k);
 
-  // ── Land fill ──
+  // ── Country borders (decorative overlay) ──
   features.forEach(f => {
-    const id = +f.id;
-    const owner = territories[id];
-    const isSelected = selectedTarget === id;
-
     ctx.beginPath(); pathGen(f);
-
-    if (isSelected) {
-      // Pulsing red highlight for attack target
-      const pulse = Math.abs(Math.sin(pulseT / 300)) * 0.3 + 0.2;
-      ctx.fillStyle = `rgba(201,76,76,${pulse})`;
-    } else if (owner && players[owner]) {
-      ctx.fillStyle = players[owner].color + 'AA';
-    } else {
-      ctx.fillStyle = 'rgba(201,168,76,0.05)';
-    }
-    ctx.fill();
-    ctx.strokeStyle = isSelected ? 'rgba(201,76,76,0.7)' : 'rgba(201,168,76,0.28)';
-    ctx.lineWidth = (isSelected ? 1.5 : 0.55) / transform.k;
+    ctx.strokeStyle = 'rgba(201,168,76,0.2)';
+    ctx.lineWidth = 0.5 / transform.k;
     ctx.stroke();
   });
 
-  // ── Expandable territory highlight (my adjacent unclaimed) ──
-  if (phase === 'game' && myId && players[myId]) {
-    players[myId].territories.forEach(tid => {
-      (adjacency[tid] || new Set()).forEach(adjId => {
-        if (territories[adjId] !== myId && featureMap[adjId]) {
-          ctx.beginPath(); pathGen(featureMap[adjId]);
-          const isEnemy = territories[adjId] && territories[adjId] !== myId;
-          if (isEnemy) {
-            ctx.strokeStyle = 'rgba(201,76,76,0.5)';
-            ctx.fillStyle = 'rgba(201,76,76,0.06)';
-          } else {
-            ctx.strokeStyle = 'rgba(201,168,76,0.65)';
-            ctx.fillStyle = 'rgba(201,168,76,0.08)';
-          }
-          ctx.lineWidth = 1.1 / transform.k;
-          ctx.stroke(); ctx.fill();
-        }
-      });
-    });
-  }
-
   // ── Graticule ──
   ctx.beginPath(); pathGen(d3.geoGraticule()());
-  ctx.strokeStyle = 'rgba(201,168,76,0.04)';
-  ctx.lineWidth = 0.4 / transform.k; ctx.stroke();
-
-  // ── Attack animations ──
-  for (const [id, anim] of attackAnims) {
-    anim.progress = Math.min(1, anim.progress + 0.025);
-    const x = anim.from[0] + (anim.to[0] - anim.from[0]) * anim.progress;
-    const y = anim.from[1] + (anim.to[1] - anim.from[1]) * anim.progress;
-
-    // Trail
-    ctx.beginPath();
-    ctx.moveTo(anim.from[0], anim.from[1]);
-    ctx.lineTo(x, y);
-    ctx.strokeStyle = anim.color + '60';
-    ctx.lineWidth = 1.5 / transform.k;
-    ctx.stroke();
-
-    // Head
-    ctx.beginPath();
-    ctx.arc(x, y, 4 / transform.k, 0, Math.PI * 2);
-    ctx.fillStyle = anim.color;
-    ctx.fill();
-
-    if (anim.progress >= 1) attackAnims.delete(id);
-  }
+  ctx.strokeStyle = 'rgba(201,168,76,0.03)';
+  ctx.lineWidth = 0.3 / transform.k;
+  ctx.stroke();
 
   // ── Player dots ──
   Object.entries(players).forEach(([id, p]) => {
@@ -666,20 +814,17 @@ function redraw() {
     const pulse = Math.sin(pulseT / (isMe ? 280 : 450) + (parseInt(id, 16) || 0) * 0.1) * 2;
     const r = (baseR + pulse) / transform.k;
 
-    // Glow
     const grd = ctx.createRadialGradient(px, py, 0, px, py, r * 3);
     grd.addColorStop(0, p.color + '55');
     grd.addColorStop(1, p.color + '00');
     ctx.beginPath(); ctx.arc(px, py, r * 3, 0, Math.PI * 2);
     ctx.fillStyle = grd; ctx.fill();
 
-    // Core
     ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
     ctx.fillStyle = p.color; ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 1 / transform.k; ctx.stroke();
 
-    // Pulse ring
     if (myPlaced || !isMe) {
       const ringR = (baseR + 5 + Math.sin(pulseT / 600) * 3) / transform.k;
       ctx.beginPath(); ctx.arc(px, py, ringR, 0, Math.PI * 2);
@@ -687,9 +832,8 @@ function redraw() {
       ctx.lineWidth = 1.2 / transform.k; ctx.stroke();
     }
 
-    // Troop label on dot
     if (isMe || transform.k > 1.5) {
-      ctx.font = `${Math.max(8, 9/transform.k)}px Cinzel`;
+      ctx.font = `${Math.max(8, 9 / transform.k)}px Cinzel`;
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'center';
       ctx.fillText(fmtNum(p.troops || 0), px, py - r - 4 / transform.k);
@@ -701,28 +845,40 @@ function redraw() {
   updateTroopBar();
 }
 
+let _mmOff = null, _mmOffCtx = null;
+
 function drawMinimap() {
   mmCtx.clearRect(0, 0, 150, 84);
-  mmCtx.fillStyle = '#000'; mmCtx.fillRect(0, 0, 150, 84);
-  features.forEach(f => {
-    const id = +f.id, owner = territories[id];
-    mmCtx.beginPath(); pathGenMM(f);
-    mmCtx.fillStyle = owner && players[owner] ? players[owner].color + '88' : 'rgba(201,168,76,0.06)';
-    mmCtx.fill();
-    mmCtx.strokeStyle = 'rgba(201,168,76,0.18)'; mmCtx.lineWidth = 0.3; mmCtx.stroke();
-  });
-  const mmProj = pathGenMM.projection();
-  Object.values(players).forEach(p => {
-    if (!p.dot) return;
-    const [px, py] = mmProj(p.dot);
-    mmCtx.beginPath(); mmCtx.arc(px, py, 2.5, 0, Math.PI * 2);
-    mmCtx.fillStyle = p.color; mmCtx.fill();
-  });
+  mmCtx.fillStyle = '#080e1e';
+  mmCtx.fillRect(0, 0, 150, 84);
+
+  if (_gridOff) {
+    if (!_mmOff) {
+      _mmOff = document.createElement('canvas');
+      _mmOff.width = 150; _mmOff.height = 84;
+      _mmOffCtx = _mmOff.getContext('2d');
+    }
+    _mmOffCtx.imageSmoothingEnabled = true;
+    _mmOffCtx.drawImage(_gridOff, 0, 0, 150, 84);
+    mmCtx.drawImage(_mmOff, 0, 0);
+  }
+
+  // Player dots on minimap
+  if (projection) {
+    const mmProj = d3.geoNaturalEarth1().scale(24).translate([75, 44]);
+    Object.values(players).forEach(p => {
+      if (!p.dot) return;
+      const [px, py] = mmProj(p.dot);
+      mmCtx.beginPath(); mmCtx.arc(px, py, 2.5, 0, Math.PI * 2);
+      mmCtx.fillStyle = p.color; mmCtx.fill();
+    });
+  }
+
   // Viewport rect
   const vx = (-transform.x / transform.k) * (150 / canvas.width);
   const vy = (-transform.y / transform.k) * (84  / canvas.height);
   const vw = 150 / transform.k, vh = 84 / transform.k;
-  mmCtx.strokeStyle = 'rgba(201,168,76,0.5)'; mmCtx.lineWidth = 1;
+  mmCtx.strokeStyle = 'rgba(201,168,76,0.7)'; mmCtx.lineWidth = 1;
   mmCtx.strokeRect(vx, vy, vw, vh);
 }
 
@@ -732,44 +888,6 @@ function updateTroopBar() {
   const bar = document.getElementById('troop-bar');
   bar.style.width = (pct * 100) + '%';
   bar.className = 'troop-bar ' + (pct > 0.85 ? 'near-max' : pct > 0.35 && pct < 0.50 ? 'optimal' : pct < 0.15 ? 'low' : '');
-}
-
-// ══════════════════════════════════════════════
-//  HIT TESTS
-// ══════════════════════════════════════════════
-function featureAt(cx, cy) {
-  for (const f of features) {
-    ctx.save();
-    ctx.translate(transform.x, transform.y);
-    ctx.scale(transform.k, transform.k);
-    ctx.beginPath(); pathGen(f);
-    const hit = ctx.isPointInPath(cx, cy);
-    ctx.restore();
-    if (hit) return f;
-  }
-  return null;
-}
-
-function playerDotAt(cx, cy) {
-  for (const [id, p] of Object.entries(players)) {
-    if (!p.dot) continue;
-    const [px, py] = projection(p.dot);
-    const sx = px * transform.k + transform.x;
-    const sy = py * transform.k + transform.y;
-    if (Math.hypot(cx - sx, cy - sy) < 16) return id;
-  }
-  return null;
-}
-
-function screenToGeo(cx, cy) {
-  return projection.invert([(cx - transform.x) / transform.k, (cy - transform.y) / transform.k]);
-}
-
-function featureCentroidScreen(fid) {
-  const f = featureMap[fid]; if (!f) return null;
-  const [lon, lat] = d3.geoCentroid(f);
-  const [x, y] = projection([lon, lat]);
-  return [x * transform.k + transform.x, y * transform.k + transform.y];
 }
 
 // ══════════════════════════════════════════════
@@ -789,7 +907,6 @@ canvas.addEventListener('wheel', e => {
   applyZoom(e.deltaY < 0 ? 1.12 : 0.89, e.clientX, e.clientY);
 }, { passive: false });
 
-// ── UNIFIED POINTER EVENTS ──
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
@@ -814,16 +931,15 @@ canvas.addEventListener('pointermove', e => {
   const ids = Object.keys(pointers);
 
   if (ids.length >= 2 && pinchStart) {
-    const [a, b] = ids.slice(0,2).map(id => pointers[id]);
-    const dist = Math.hypot(b.x - a.x, b.y - a.y);
-    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    const [a, b] = ids.slice(0, 2).map(id => pointers[id]);
+    const dist  = Math.hypot(b.x - a.x, b.y - a.y);
+    const cx    = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
     const scale = dist / pinchStart.dist;
-    const newK = Math.min(Math.max(pinchStart.tk * scale, 0.45), 22);
-    const mdx = cx - pinchStart.cx, mdy = cy - pinchStart.cy;
+    const newK  = Math.min(Math.max(pinchStart.tk * scale, 0.45), 22);
+    const mdx   = cx - pinchStart.cx, mdy = cy - pinchStart.cy;
     transform.x = pinchStart.tx * (newK / pinchStart.tk) + mdx + cx * (1 - newK / pinchStart.tk);
     transform.y = pinchStart.ty * (newK / pinchStart.tk) + mdy + cy * (1 - newK / pinchStart.tk);
     transform.k = newK;
-    hidePlayerTooltip();
     return;
   }
 
@@ -834,18 +950,12 @@ canvas.addEventListener('pointermove', e => {
     if (isDragging) {
       transform.x = e.clientX - dragStart.x;
       transform.y = e.clientY - dragStart.y;
-      hidePlayerTooltip();
-      return;
     }
-    const pid = playerDotAt(e.clientX, e.clientY);
-    if (pid && pid !== myId) showPlayerTooltip(pid, e.clientX, e.clientY);
-    else hidePlayerTooltip();
   }
 });
 
 canvas.addEventListener('pointerup', e => {
-  const count = Object.keys(pointers).length;
-  const wasOne = count === 1;
+  const wasOne  = Object.keys(pointers).length === 1;
   const wasDrag = isDragging;
   delete pointers[e.pointerId];
   if (Object.keys(pointers).length < 2) pinchStart = null;
@@ -864,167 +974,62 @@ canvas.addEventListener('pointercancel', e => {
 function handleClick(cx, cy) {
   if (phase === 'placement') {
     if (myPlaced) return;
-    const f = featureAt(cx, cy);
-    if (!f) { toast('Click on land to place your base', 'error', 2000); return; }
+    const cellIdx = screenToCell(cx, cy);
+    if (cellIdx < 0 || !gridLand[cellIdx]) {
+      toast('Click on land to place your base', 'error', 2000);
+      return;
+    }
     const geo = screenToGeo(cx, cy);
     players[myId].dot = geo;
     myPlaced = true;
-    // Register starting territory locally immediately — don't wait for server echo
-    captureTerritory(+f.id, myId, null);
-    send({ type: 'place_dot', geo, countryId: +f.id });
+
+    // Seed initial territory
+    seedPlayerTiles(cellIdx, myId, 3);
+
+    // Register with server (country-level)
+    const cid = cellToCountry(cellIdx);
+    if (cid) {
+      territories[cid] = myId;
+      if (players[myId]) players[myId].territories.add(cid);
+    }
+    send({ type: 'place_dot', geo, countryId: cid || 0 });
     toast('Base established!', 'success', 2000);
 
   } else if (phase === 'game') {
-    const f = featureAt(cx, cy);
-    if (!f) { clearTarget(); return; }
-    const id = +f.id;
-    const owner = territories[id];
+    const cellIdx = screenToCell(cx, cy);
+    if (cellIdx < 0) return;
+    const myPidx = getPlayerIdx(myId);
 
-    if (owner === myId) { clearTarget(); return; }
+    // Clicking own tile cancels flood
+    if (gridOwner[cellIdx] === myPidx) { cancelFlood(); return; }
 
-    const myTerr = players[myId]?.territories || new Set();
-    if (myTerr.size === 0) {
-      // Shouldn't happen but guard: try to recover from server state
-      toast('Waiting for territory sync…', 'info', 1500);
-      return;
-    }
-
-    // Fast check: directly adjacent?
-    let isAdjacent = false;
-    for (const tid of myTerr) {
-      if ((adjacency[tid] || new Set()).has(id)) { isAdjacent = true; break; }
-    }
-
-    if (isAdjacent) {
-      // Single-hop — show attack button as normal
-      selectedTarget = id;
-      const btn = document.getElementById('attack-btn');
-      const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
-      btn.disabled = false;
-      btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
-      btn.className = 'attack-btn active';
-      return;
-    }
-
-    // Multi-hop: BFS on pixel-derived adjacency graph.
-    // adjacency[] was built by scanning touching pixels, so it is water-aware:
-    // there are simply no adjacency links across ocean gaps.
-    cancelFlood();
-    const path = bfsPath(myTerr, id);
-    if (path === null) {
-      toast('Separated by water', 'error', 1800);
-    } else {
-      startFlood(path);
-    }
+    startFloodToCell(cellIdx);
   }
 }
 
-function clearTarget() {
-  selectedTarget = null;
-  const btn = document.getElementById('attack-btn');
-  btn.disabled = true;
-  btn.textContent = 'Select a territory to attack';
-  btn.className = '';
+function screenToGeo(cx, cy) {
+  return projection.invert([(cx - transform.x) / transform.k, (cy - transform.y) / transform.k]);
 }
 
-// ══════════════════════════════════════════════
-//  BFS PATH  (on pixel-rasterized adjacency)
-//  Returns ordered array of countryIds to capture
-//  from myTerr edge → targetId. Null if no path.
-// ══════════════════════════════════════════════
-function bfsPath(myTerr, targetId) {
-  const parent = new Map();
-  parent.set(targetId, null);
-  const queue = [targetId];
-  while (queue.length > 0) {
-    const cur = queue.shift();
-    for (const nid of (adjacency[cur] || new Set())) {
-      if (parent.has(nid)) continue;
-      parent.set(nid, cur);
-      if (myTerr.has(nid)) {
-        // Reconstruct path: nid (mine) → ... → targetId
-        const path = [];
-        let c = targetId;
-        while (c !== nid) { path.unshift(c); c = parent.get(c); }
-        return path.length ? path : [targetId];
-      }
-      queue.push(nid);
-    }
+function featureAt(cx, cy) {
+  for (const f of features) {
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.scale(transform.k, transform.k);
+    ctx.beginPath(); pathGen(f);
+    const hit = ctx.isPointInPath(cx, cy);
+    ctx.restore();
+    if (hit) return f;
   }
   return null;
 }
 
 // ══════════════════════════════════════════════
-//  FLOOD EXPANSION  (OpenFront-style auto-expand)
-// ══════════════════════════════════════════════
-let floodPath  = [];
-let floodTimer = null;
-
-function cancelFlood() {
-  if (floodTimer) { clearInterval(floodTimer); floodTimer = null; }
-  floodPath = [];
-  clearTarget();
-}
-
-function startFlood(path) {
-  floodPath = path.slice();
-  toast(`Expanding ${path.length} countr${path.length > 1 ? 'ies' : 'y'}…`, 'info', 2000);
-  floodTimer = setInterval(floodTick, 700);
-  floodTick(); // fire first step immediately
-}
-
-function floodTick() {
-  const me = players[myId]; if (!me || phase !== 'game') return;
-  if (floodPath.length === 0) { cancelFlood(); return; }
-
-  const nextId = floodPath[0];
-  if (territories[nextId] === myId) { floodPath.shift(); floodTick(); return; }
-
-  let adj = false;
-  for (const tid of me.territories) {
-    if ((adjacency[tid] || new Set()).has(nextId)) { adj = true; break; }
-  }
-  if (!adj) return; // wait for previous capture to land
-
-  floodPath.shift();
-  fireAttackAt(nextId);
-  if (floodPath.length === 0) cancelFlood();
-}
-
-// ══════════════════════════════════════════════
-//  ATTACK
-// ══════════════════════════════════════════════
-function launchAttack() {
-  if (!selectedTarget || phase !== 'game') return;
-  const me = players[myId];
-  if (!me || me.troops < 10) { toast('Not enough troops', 'error'); return; }
-  fireAttackAt(selectedTarget);
-  toast(`Attack! (${Math.round(attackRatio*100)}%)`, 'info', 1500);
-  clearTarget();
-}
-
-function fireAttackAt(cid) {
-  const me = players[myId]; if (!me) return;
-  send({ type: 'attack', territory: cid, attackRatio });
-  // Animate from our closest adjacent tile toward target
-  let src = null;
-  for (const tid of me.territories) {
-    if ((adjacency[tid] || new Set()).has(cid)) { src = tid; break; }
-  }
-  const fromC = src ? featureCentroidScreen(src) : null;
-  const toC   = featureCentroidScreen(cid);
-  if (fromC && toC) {
-    attackAnims.set(Date.now() + Math.random(), {
-      from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
-      to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
-      progress: 0, color: me.color,
-    });
-  }
-}
-
-// ══════════════════════════════════════════════
 //  SLIDER HANDLERS
 // ══════════════════════════════════════════════
+function clearTarget() {}
+function launchAttack() { cancelFlood(); }
+
 function onWorkerSlider(val) {
   workerRatio = val / 100;
   document.getElementById('worker-pct').textContent = val + '%';
@@ -1034,11 +1039,6 @@ function onWorkerSlider(val) {
 function onAttackSlider(val) {
   attackRatio = val / 100;
   document.getElementById('attack-pct').textContent = val + '%';
-  if (selectedTarget !== null) {
-    const owner = territories[selectedTarget];
-    const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
-    document.getElementById('attack-btn').textContent = `Attack ${ownerName} (${val}% troops)`;
-  }
 }
 
 // ══════════════════════════════════════════════
@@ -1069,36 +1069,74 @@ function updateTimerArc(t) {
 
 function endPlacement() {
   if (!myPlaced && myId) {
-    const f = features[Math.floor(Math.random() * features.length)];
-    const geo = d3.geoCentroid(f);
-    players[myId].dot = geo;
-    myPlaced = true;
-    captureTerritory(+f.id, myId, null);
-    send({ type: 'place_dot', geo, countryId: +f.id });
-    toast('Base placed randomly', 'info', 2500);
+    // Random land tile
+    let startIdx = -1;
+    for (let attempt = 0; attempt < 10000 && startIdx < 0; attempt++) {
+      const i = Math.floor(Math.random() * GRID_W * GRID_H);
+      if (gridLand[i]) startIdx = i;
+    }
+    if (startIdx >= 0) {
+      const gx = startIdx % GRID_W, gy = Math.floor(startIdx / GRID_W);
+      const sx = (gx + 0.5) / GRID_W * canvas.width  * transform.k + transform.x;
+      const sy = (gy + 0.5) / GRID_H * canvas.height * transform.k + transform.y;
+      const geo = screenToGeo(sx, sy);
+      players[myId].dot = geo;
+      myPlaced = true;
+      seedPlayerTiles(startIdx, myId, 3);
+      const cid = cellToCountry(startIdx);
+      if (cid) {
+        territories[cid] = myId;
+        if (players[myId]) players[myId].territories.add(cid);
+      }
+      send({ type: 'place_dot', geo, countryId: cid || 0 });
+      toast('Base placed randomly', 'info', 2500);
+    }
   }
   document.getElementById('placement-overlay').style.display = 'none';
-  document.getElementById('phase-label').textContent = 'Campaign — click enemy/empty territory to attack';
+  document.getElementById('phase-label').textContent = 'Campaign — click any tile to expand';
   phase = 'game';
   toast('Expand your empire!', 'success', 3000);
-
-  // Start checking for enclosures
-  setInterval(checkEnclosures, 2000);
+  setInterval(checkEnclosures, 3000);
 }
 
 // ══════════════════════════════════════════════
-//  VICTORY CHECK
+//  ENCLOSURE + VICTORY
 // ══════════════════════════════════════════════
+function checkEnclosures() {
+  if (!myId || phase !== 'game') return;
+  const myTerr = players[myId]?.territories;
+  if (!myTerr || myTerr.size === 0) return;
+
+  const enclosed = [];
+  for (const f of features) {
+    const id = +f.id;
+    if (territories[id] === myId) continue;
+    const neighbors = adjacency[id] || new Set();
+    if (!neighbors.size) continue;
+    let allMine = true;
+    for (const nid of neighbors) {
+      if (territories[nid] !== myId) { allMine = false; break; }
+    }
+    if (allMine) enclosed.push(id);
+  }
+  if (enclosed.length > 0) send({ type: 'claim_enclosure', territories: enclosed });
+}
+
 function checkVictory() {
-  const total = features.length;
+  const total = GRID_W * GRID_H;
+  let landTotal = 0;
+  for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
+
   for (const [pid, p] of Object.entries(players)) {
-    const pct = p.territories.size / total;
+    const pidx = playerIdx[pid];
+    if (!pidx) continue;
+    let owned = 0;
+    for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
+    const pct = landTotal > 0 ? owned / landTotal : 0;
     if (pct >= WIN_PCT) {
-      const name = p.name;
-      document.getElementById('victory-sub').textContent =
-        pid === myId
-          ? `You have conquered ${Math.round(pct*100)}% of the world.`
-          : `${name} has dominated ${Math.round(pct*100)}% of the world.`;
+      document.getElementById('victory-sub').textContent = pid === myId
+        ? `You have conquered ${Math.round(pct * 100)}% of the world.`
+        : `${p.name} has dominated ${Math.round(pct * 100)}% of the world.`;
       document.getElementById('victory-overlay').classList.add('show');
     }
   }
@@ -1108,18 +1146,48 @@ function checkVictory() {
 //  PLAYER TOOLTIP
 // ══════════════════════════════════════════════
 const ptt = document.getElementById('player-tooltip');
+
 function showPlayerTooltip(id, cx, cy) {
   const p = players[id]; if (!p) return;
-  const pct = features.length > 0 ? ((p.territories.size / features.length) * 100).toFixed(1) : 0;
+  const pidx = playerIdx[id];
+  let owned = 0;
+  if (pidx) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
+  let landTotal = 0;
+  for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
+  const pct = landTotal > 0 ? ((owned / landTotal) * 100).toFixed(1) : 0;
+
   document.getElementById('ptt-name').textContent        = p.name;
   document.getElementById('ptt-troops').textContent      = fmtNum(p.troops || 0);
-  document.getElementById('ptt-territories').textContent = p.territories.size;
+  document.getElementById('ptt-territories').textContent = owned;
   document.getElementById('ptt-pct').textContent         = pct + '%';
   ptt.style.left = cx + 'px';
   ptt.style.top  = (cy - 125) + 'px';
   ptt.classList.add('visible');
 }
 function hidePlayerTooltip() { ptt.classList.remove('visible'); }
+
+// ══════════════════════════════════════════════
+//  CAPTURE TERRITORY  (server → local sync)
+// ══════════════════════════════════════════════
+function captureTerritory(id, newOwner, prevOwner) {
+  const prev = prevOwner || territories[id];
+  if (prev && players[prev]) players[prev].territories.delete(+id);
+  territories[id] = newOwner;
+  if (players[newOwner]) players[newOwner].territories.add(+id);
+
+  // Sync all grid tiles belonging to this country
+  if (cellCountry) {
+    const pidx = getPlayerIdx(newOwner);
+    for (let i = 0; i < GRID_W * GRID_H; i++) {
+      if (cellCountry[i] === +id) gridOwner[i] = pidx;
+    }
+    // Invalidate color cache for this pidx
+    pidxRgb[pidx] = null;
+  }
+
+  updateScoreboard();
+  updateSelfCard();
+}
 
 // ══════════════════════════════════════════════
 //  WEBSOCKET
@@ -1148,7 +1216,7 @@ function handleMsg(msg) {
       myColor = PLAYER_COLORS[Object.keys(players).length % PLAYER_COLORS.length];
       if (!players[myId]) players[myId] = {
         name: myName, color: myColor, dot: null,
-        territories: new Set(), troops: 50, maxTroops: 1000, gold: 0, workerRatio: 0.2,
+        territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
       };
       document.getElementById('self-dot').style.background = myColor;
       updateSelfCard();
@@ -1179,9 +1247,17 @@ function handleMsg(msg) {
     case 'playerLeft':
       if (players[msg.id]) {
         const name = players[msg.id].name;
-        // Release their territories
+        // Release their country territories
         for (const [tid, owner] of Object.entries(territories)) {
           if (owner === msg.id) delete territories[tid];
+        }
+        // Release their grid tiles
+        const pidx = playerIdx[msg.id];
+        if (pidx) {
+          for (let i = 0; i < gridOwner.length; i++) {
+            if (gridOwner[i] === pidx) gridOwner[i] = 0;
+          }
+          delete pidxRgb[pidx];
         }
         players[msg.id].territories.clear();
         delete players[msg.id];
@@ -1190,7 +1266,6 @@ function handleMsg(msg) {
       }
       break;
 
-    // Server tick update: authoritative troop counts
     case 'state_update':
       msg.players.forEach(p => {
         if (!players[p.id]) return;
@@ -1203,24 +1278,26 @@ function handleMsg(msg) {
       updateScoreboard();
       break;
 
-    // Another player placed their dot
     case 'dot_placed':
-      if (players[msg.playerId]) {
-        players[msg.playerId].dot = msg.geo;
-      }
+      if (players[msg.playerId]) players[msg.playerId].dot = msg.geo;
       if (msg.countryId !== undefined && msg.playerId !== myId) {
-        // For other players, register their starting territory
+        // Seed their starting tiles
+        if (msg.geo && gridLand) {
+          const screenPt = projection(msg.geo);
+          const sx = screenPt[0] * transform.k + transform.x;
+          const sy = screenPt[1] * transform.k + transform.y;
+          const ci = screenToCell(sx, sy);
+          if (ci >= 0 && gridLand[ci]) seedPlayerTiles(ci, msg.playerId, 3);
+        }
         captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
       }
       break;
 
-    // Server confirmed territory capture (from attack)
     case 'territory_captured':
       captureTerritory(msg.territory, msg.attackerId, msg.defenderId);
       checkVictory();
       break;
 
-    // Enclosure instant capture
     case 'enclosure_claimed':
       (msg.territories || []).forEach(tid => {
         captureTerritory(tid, msg.playerId, territories[tid]);
@@ -1231,61 +1308,18 @@ function handleMsg(msg) {
       checkVictory();
       break;
 
-    case 'attack_start': {
-      activeAttacks.set(msg.attackId, msg);
-      // Spawn animation for other players' attacks too
-      if (msg.attackerId !== myId) {
-        const fromC = featureCentroidScreen(
-          // find any of their territories adjacent to target
-          (() => {
-            if (!players[msg.attackerId]) return null;
-            for (const tid of players[msg.attackerId].territories) {
-              if ((adjacency[tid] || new Set()).has(msg.territory)) return tid;
-            }
-            return null;
-          })()
-        );
-        const toC = featureCentroidScreen(msg.territory);
-        if (fromC && toC && players[msg.attackerId]) {
-          attackAnims.set(msg.attackId, {
-            from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
-            to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
-            progress: 0,
-            color: players[msg.attackerId].color,
-          });
-        }
-      }
-      break;
-    }
-
-    case 'attack_end':
-      activeAttacks.delete(msg.attackId);
-      attackAnims.delete(msg.attackId);
-      break;
-
-    // Legacy territory_claimed (placement)
     case 'territory_claimed':
       captureTerritory(msg.territory, msg.playerId, null);
       break;
 
-    case 'pong': break;
+    case 'attack_start':
+    case 'attack_end':
+    case 'pong':
+      break;
 
     default:
-      if (msg.from && msg.geo && players[msg.from]) {
-        players[msg.from].dot = msg.geo;
-      }
+      if (msg.from && msg.geo && players[msg.from]) players[msg.from].dot = msg.geo;
   }
-}
-
-function captureTerritory(id, newOwner, prevOwner) {
-  // Remove from previous owner
-  const prev = prevOwner || territories[id];
-  if (prev && players[prev]) players[prev].territories.delete(+id);
-  // Assign to new owner
-  territories[id] = newOwner;
-  if (players[newOwner]) players[newOwner].territories.add(+id);
-  updateScoreboard();
-  updateSelfCard();
 }
 
 // ══════════════════════════════════════════════
@@ -1293,8 +1327,13 @@ function captureTerritory(id, newOwner, prevOwner) {
 // ══════════════════════════════════════════════
 function updateSelfCard() {
   const me = players[myId]; if (!me) return;
+  // Count our tiles
+  const pidx = playerIdx[myId];
+  let tileCount = 0;
+  if (pidx) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) tileCount++;
+
   document.getElementById('self-name').textContent        = me.name;
-  document.getElementById('self-territories').textContent = me.territories.size;
+  document.getElementById('self-territories').textContent = tileCount;
   document.getElementById('self-troops').textContent      = fmtNum(Math.floor(me.troops || 0));
   document.getElementById('self-max').textContent         = fmtNum(me.maxTroops || 0);
   document.getElementById('hud-gold').textContent         = fmtNum(Math.floor(me.gold || 0));
@@ -1304,20 +1343,28 @@ function updateSelfCard() {
 function updateScoreboard() {
   const list = document.getElementById('score-list');
   list.innerHTML = '';
-  const total = features.length || 1;
-  Object.entries(players)
-    .sort((a,b) => b[1].territories.size - a[1].territories.size)
-    .forEach(([id, p]) => {
-      const pct = ((p.territories.size / total) * 100).toFixed(1);
-      const row = document.createElement('div');
-      row.className = 'score-row';
-      row.innerHTML = `
-        <div class="score-dot" style="background:${p.color}"></div>
-        <span class="score-name">${escHtml(p.name)}${id===myId?' <span style="color:var(--text-muted);font-size:11px">(you)</span>':''}</span>
-        <span class="score-val">${pct}% · ${fmtNum(Math.floor(p.troops||0))}</span>
-      `;
-      list.appendChild(row);
-    });
+
+  let landTotal = 0;
+  if (gridLand) for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
+
+  const rows = Object.entries(players).map(([id, p]) => {
+    const pidx = playerIdx[id];
+    let owned = 0;
+    if (pidx && gridOwner) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
+    return { id, p, owned };
+  }).sort((a, b) => b.owned - a.owned);
+
+  rows.forEach(({ id, p, owned }) => {
+    const pct = landTotal > 0 ? ((owned / landTotal) * 100).toFixed(1) : '0.0';
+    const row = document.createElement('div');
+    row.className = 'score-row';
+    row.innerHTML = `
+      <div class="score-dot" style="background:${p.color}"></div>
+      <span class="score-name">${escHtml(p.name)}${id===myId?' <span style="color:var(--text-muted);font-size:11px">(you)</span>':''}</span>
+      <span class="score-val">${pct}% · ${fmtNum(Math.floor(p.troops||0))}</span>
+    `;
+    list.appendChild(row);
+  });
 }
 
 function updateHUD() {
@@ -1328,7 +1375,7 @@ function updateHUD() {
 // ══════════════════════════════════════════════
 //  UTIL
 // ══════════════════════════════════════════════
-function toast(msg, type='info', dur=3000) {
+function toast(msg, type = 'info', dur = 3000) {
   const el = document.createElement('div');
   el.className = `toast ${type}`; el.textContent = msg;
   document.getElementById('toast-container').appendChild(el);
@@ -1336,15 +1383,17 @@ function toast(msg, type='info', dur=3000) {
 }
 
 function fmtNum(n) {
-  if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n/1_000).toFixed(1) + 'K';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return String(Math.floor(n));
 }
 
-function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) send({ type:'ping', t:Date.now() });
+  if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'ping', t: Date.now() });
 }, 15000);
 
 // ══════════════════════════════════════════════
@@ -1353,7 +1402,7 @@ setInterval(() => {
 async function boot() {
   const params = getParams();
   roomCode = params.room; mapKey = params.map; myName = params.username;
-  myColor = PLAYER_COLORS[0]; // will be reassigned on welcome
+  myColor = PLAYER_COLORS[0];
   document.getElementById('hud-map').textContent = mapKey.charAt(0).toUpperCase() + mapKey.slice(1);
   resize();
   await loadMap();
