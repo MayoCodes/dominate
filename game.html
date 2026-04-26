@@ -372,8 +372,16 @@ let activeAttacks = new Map();
 // Client-local attack animations: attackId → { from:[x,y], to:[x,y], progress, color }
 let attackAnims = new Map();
 
-// Selected target territory for next attack
-let selectedTarget = null;
+// Selected target pixel for next attack
+let selectedTarget = null;   // pixel index
+
+// Pixel/tile grid (OpenFront-style)
+const GRID_W = 600, GRID_H = 338;
+let pixelCountry = null;   // Uint16Array [GRID_W*GRID_H] → countryId (0=water)
+let pixelOwner   = null;   // Uint8Array-backed Map: pixelIdx → playerId string
+                           // We use a plain object for simplicity
+let pixOwner = {};         // pixelIdx (number) → playerId (string)
+let countryPixels = {};    // countryId → Set of pixel indices (for fast lookup)
 
 let topoData = null, features = [], featureMap = {}, adjacency = {};
 let phase = 'loading';
@@ -445,31 +453,124 @@ async function loadMap() {
   setLoad(20, 'Fetching map data…');
   const world = await d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
   topoData = world;
-  setLoad(55, 'Parsing territories…');
+  setLoad(50, 'Parsing territories…');
   features = topojson.feature(world, world.objects.countries).features;
   featureMap = {};
   features.forEach(f => { featureMap[+f.id] = f; });
-  setLoad(72, 'Building adjacency…');
-  buildAdjacency(world);
-  setLoad(90, 'Preparing battlefield…');
+  setLoad(70, 'Rasterizing map grid…');
   buildProjection(); resize();
+  rasterizeGrid();
   setLoad(100, 'Ready.');
   setTimeout(hideLoading, 350);
 }
 
-function buildAdjacency(world) {
+// ══════════════════════════════════════════════
+//  RASTERIZE
+//  Draw every country as a unique color into an
+//  offscreen canvas at GRID_W × GRID_H.
+//  Read pixels back → pixelCountry[] array.
+//  This gives us OpenFront-style pixel tiles.
+// ══════════════════════════════════════════════
+function rasterizeGrid() {
+  const off = document.createElement('canvas');
+  off.width = GRID_W; off.height = GRID_H;
+  const oc = off.getContext('2d', { willReadFrequently: true });
+
+  // Projection fitted to offscreen canvas
+  const offProj = d3.geoNaturalEarth1()
+    .scale(Math.max(GRID_W / 5.8, GRID_H / 3))
+    .translate([GRID_W / 2, GRID_H / 2.1]);
+  const offPath = d3.geoPath(offProj, oc);
+
+  // Each feature gets a unique packed-RGB color: index+1 (skip 0=background/water)
+  // We pack as R=hi byte, G=mid, B=low of (i+1)
+  oc.fillStyle = '#000000';
+  oc.fillRect(0, 0, GRID_W, GRID_H);
+
+  features.forEach((f, i) => {
+    const n = i + 1;
+    const r = (n >> 16) & 0xff;
+    const g = (n >> 8)  & 0xff;
+    const b =  n        & 0xff;
+    oc.fillStyle = `rgb(${r},${g},${b})`;
+    oc.beginPath(); offPath(f); oc.fill();
+  });
+
+  const imageData = oc.getImageData(0, 0, GRID_W, GRID_H).data;
+  pixelCountry = new Uint16Array(GRID_W * GRID_H); // 0 = water
+  countryPixels = {};
+  features.forEach(f => { countryPixels[+f.id] = new Set(); });
+
+  for (let i = 0; i < GRID_W * GRID_H; i++) {
+    const r = imageData[i*4], g = imageData[i*4+1], b = imageData[i*4+2];
+    const n = (r << 16) | (g << 8) | b;
+    if (n === 0) { pixelCountry[i] = 0; continue; } // water
+    const featureIdx = n - 1;
+    if (featureIdx < features.length) {
+      const cid = +features[featureIdx].id;
+      pixelCountry[i] = cid;
+      countryPixels[cid].add(i);
+    }
+  }
+
+  // Build adjacency from pixel grid (4-connected neighbors of different countries)
   adjacency = {};
   features.forEach(f => { adjacency[+f.id] = new Set(); });
-  topojson.mesh(world, world.objects.countries, (a, b) => {
-    if (a !== b) {
-      const aid = +a.id, bid = +b.id;
-      if (!adjacency[aid]) adjacency[aid] = new Set();
-      if (!adjacency[bid]) adjacency[bid] = new Set();
-      adjacency[aid].add(bid);
-      adjacency[bid].add(aid);
+  for (let y = 0; y < GRID_H; y++) {
+    for (let x = 0; x < GRID_W; x++) {
+      const idx = y * GRID_W + x;
+      const cid = pixelCountry[idx];
+      if (cid === 0) continue;
+      // Check right neighbor
+      if (x + 1 < GRID_W) {
+        const rid = pixelCountry[idx + 1];
+        if (rid !== 0 && rid !== cid) {
+          adjacency[cid].add(rid); adjacency[rid].add(cid);
+        }
+      }
+      // Check bottom neighbor
+      if (y + 1 < GRID_H) {
+        const bid = pixelCountry[idx + GRID_W];
+        if (bid !== 0 && bid !== cid) {
+          adjacency[cid].add(bid); adjacency[bid].add(cid);
+        }
+      }
     }
-    return false;
-  });
+  }
+}
+
+// Convert screen coords to grid pixel index
+function screenToPixel(cx, cy) {
+  // Map screen → grid coords using the same projection ratio
+  const gx = Math.floor((cx - transform.x) / transform.k * (GRID_W / canvas.width));
+  const gy = Math.floor((cy - transform.y) / transform.k * (GRID_H / canvas.height));
+  if (gx < 0 || gx >= GRID_W || gy < 0 || gy >= GRID_H) return -1;
+  return gy * GRID_W + gx;
+}
+
+// Convert grid pixel index to screen coords (center of pixel)
+function pixelToScreen(idx) {
+  const gx = idx % GRID_W, gy = Math.floor(idx / GRID_W);
+  const sx = (gx + 0.5) / GRID_W * canvas.width  * transform.k + transform.x;
+  const sy = (gy + 0.5) / GRID_H * canvas.height * transform.k + transform.y;
+  return [sx, sy];
+}
+
+// Get all pixel indices in a country that border a different owner (the frontier)
+function countryBorderPixels(cid, targetOwnerId) {
+  const result = [];
+  for (const idx of (countryPixels[cid] || new Set())) {
+    const x = idx % GRID_W, y = Math.floor(idx / GRID_W);
+    const neighbors = [idx-1, idx+1, idx-GRID_W, idx+GRID_W];
+    for (const nidx of neighbors) {
+      if (nidx < 0 || nidx >= GRID_W*GRID_H) continue;
+      const nOwner = pixOwner[nidx];
+      if (targetOwnerId === undefined ? nOwner !== pixOwner[idx] : nOwner === targetOwnerId) {
+        result.push(idx); break;
+      }
+    }
+  }
+  return result;
 }
 
 // ══════════════════════════════════════════════
@@ -827,78 +928,34 @@ function handleClick(cx, cy) {
     const id = +f.id;
     const owner = territories[id];
 
-    if (owner === myId) {
-      // Clicking own territory clears selection
-      clearTarget();
+    if (owner === myId) { clearTarget(); return; }
+
+    const myTerr = players[myId]?.territories || new Set();
+    if (myTerr.size === 0) { toast('No territory yet', 'error', 1800); return; }
+
+    // Use pixel-grid BFS to find path from any of my border pixels toward the clicked country.
+    // This is exactly how OpenFront works: pixel-level connectivity, not country-level.
+    // Water pixels (pixelCountry[i]===0) have no entry → BFS naturally stops at ocean.
+    cancelFlood();
+    const path = pixelBFSPath(myTerr, id);
+    if (path === null) {
+      toast('Separated by water', 'error', 1800);
       return;
     }
 
-    const myTerr = players[myId]?.territories || new Set();
-
-    // Check direct adjacency first (fast path)
-    let isDirectlyAdjacent = false;
-    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(id)) isDirectlyAdjacent = true; });
-
-    if (isDirectlyAdjacent) {
-      // Normal direct attack
+    // path is an array of countryIds to capture in order (may be length 1 for adjacent)
+    if (path.length === 1) {
+      // Directly adjacent country — show attack button
       selectedTarget = id;
       const btn = document.getElementById('attack-btn');
       const ownerName = owner && players[owner] ? players[owner].name : 'Unclaimed';
       btn.disabled = false;
       btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
       btn.className = 'attack-btn active';
-      return;
+    } else {
+      // Multi-hop flood — start auto-expansion like OpenFront
+      startFlood(path);
     }
-
-    // BFS: check if target is reachable through my own territories from any of my border tiles.
-    // This allows clicking anywhere in your general region — troops flow outward through your land.
-    // Only fails if the target is truly separated by water (not connected via land adjacency at all).
-    if (myTerr.size > 0) {
-      // BFS through MY territories to find ones adjacent to target
-      // We want: is there a path through my land that gets adjacent to the target?
-      // Equivalent: is the target reachable via land-adjacency from ANY of my territories
-      // (through my territory graph)? Since my territories are one connected blob normally,
-      // we just check if ANY of my territories is adjacent to the target via BFS through my tiles.
-      // The simpler correct check: BFS from target outward through all land (not just mine),
-      // see if we hit any of my territory before crossing water. If yes → valid expansion.
-
-      // BFS from target through contiguous land to see if my territory is reachable
-      const visited = new Set();
-      const queue = [id];
-      visited.add(id);
-      let reachable = false;
-      let steps = 0;
-      const MAX_STEPS = 500; // prevent runaway on large maps
-
-      while (queue.length > 0 && steps < MAX_STEPS) {
-        steps++;
-        const current = queue.shift();
-        const neighbors = adjacency[current] || new Set();
-        for (const nid of neighbors) {
-          if (visited.has(nid)) continue;
-          visited.add(nid);
-          if (myTerr.has(nid)) {
-            reachable = true;
-            break;
-          }
-          // Only traverse through unclaimed or enemy land (not across water gaps)
-          // adjacency already only contains land borders, so all neighbors are land
-          queue.push(nid);
-        }
-        if (reachable) break;
-      }
-
-      if (reachable) {
-        // Valid — auto-expand by launching BFS wave attacks outward
-        // Queue up a sequential flood attack from the border inward to the target
-        launchFloodAttack(id);
-        return;
-      }
-    }
-
-    // Truly unreachable (separated by water)
-    toast('Cannot reach — separated by water', 'error', 1800);
-    clearTarget();
   }
 }
 
@@ -911,176 +968,113 @@ function clearTarget() {
 }
 
 // ══════════════════════════════════════════════
-//  ATTACK
+//  PIXEL-LEVEL BFS PATH
+//  Uses the rasterized pixel grid to find which
+//  countries lie on the shortest land path from
+//  any of myTerr → targetCountryId.
+//  Returns ordered array of countryIds to capture.
+//  Returns null if water-separated.
+// ══════════════════════════════════════════════
+function pixelBFSPath(myTerr, targetCid) {
+  // BFS on pixel grid backward from any pixel of targetCid toward any pixel of myTerr.
+  // We work at the country level using pixel connectivity:
+  // two countries are connected if they share a pixel border in the rasterized grid.
+  // adjacency[] was already built from the pixel scan in rasterizeGrid(), so we can
+  // BFS on countries (not individual pixels) — much faster, same topology.
+
+  // BFS backwards from targetCid through country adjacency until we hit myTerr
+  const parent = new Map(); // countryId → countryId
+  parent.set(targetCid, null);
+  const queue = [targetCid];
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    for (const nid of (adjacency[cur] || new Set())) {
+      if (parent.has(nid)) continue;
+      parent.set(nid, cur);
+      if (myTerr.has(nid)) {
+        // Reconstruct path from nid (mine) → targetCid
+        const path = [];
+        let c = targetCid;
+        while (c !== nid) { path.unshift(c); c = parent.get(c); }
+        return path.length === 0 ? [targetCid] : path;
+      }
+      queue.push(nid);
+    }
+  }
+  return null; // no land path
+}
+
+// ══════════════════════════════════════════════
+//  ATTACK  (single adjacent target via button)
 // ══════════════════════════════════════════════
 function launchAttack() {
   if (!selectedTarget || phase !== 'game') return;
   const me = players[myId];
   if (!me || me.troops < 10) { toast('Not enough troops', 'error'); return; }
-
-  send({ type: 'attack', territory: selectedTarget, attackRatio });
-
-  // Spawn local animation
-  const myTerr = me.territories;
-  let closestAdj = null, minDist = Infinity;
-  myTerr.forEach(tid => {
-    if ((adjacency[tid] || new Set()).has(selectedTarget)) {
-      const c = featureCentroidScreen(tid);
-      if (!c) return;
-      const d = Math.hypot(c[0] - canvas.width/2, c[1] - canvas.height/2);
-      if (d < minDist) { minDist = d; closestAdj = tid; }
-    }
-  });
-
-  const fromC = closestAdj ? featureCentroidScreen(closestAdj) : null;
-  const toC = featureCentroidScreen(selectedTarget);
-  if (fromC && toC) {
-    const animId = Date.now();
-    attackAnims.set(animId, {
-      from: [(fromC[0] - transform.x)/transform.k, (fromC[1] - transform.y)/transform.k],
-      to:   [(toC[0]  - transform.x)/transform.k, (toC[1]  - transform.y)/transform.k],
-      progress: 0,
-      color: me.color,
-    });
-  }
-
-  toast(`Attack launched! (${Math.round(attackRatio*100)}%)`, 'info', 1500);
+  fireAttackAt(selectedTarget);
+  toast(`Attack! (${Math.round(attackRatio*100)}%)`, 'info', 1500);
   clearTarget();
 }
 
-// ══════════════════════════════════════════════
-//  FLOOD ATTACK
-//  OpenFront-style: BFS from border outward toward
-//  the clicked target, firing attacks wave by wave
-// ══════════════════════════════════════════════
-let floodQueue = [];      // pending territory ids to attack in order
-let floodInterval = null; // timer driving the wave
-let floodTarget = null;   // final destination
-
-function launchFloodAttack(targetId) {
-  // Build BFS path from MY border territories toward target
-  // We find the shortest land path from ANY of my territories → target
-  const myTerr = players[myId]?.territories || new Set();
-
-  // BFS from targetId back toward my territory, recording parent map
-  const parent = new Map();
-  const queue = [targetId];
-  parent.set(targetId, null);
-  let found = null;
-
-  while (queue.length > 0) {
-    const cur = queue.shift();
-    const neighbors = adjacency[cur] || new Set();
-    for (const nid of neighbors) {
-      if (parent.has(nid)) continue;
-      parent.set(nid, cur);
-      if (myTerr.has(nid)) { found = nid; break; }
-      queue.push(nid);
-    }
-    if (found !== null) break;
+function fireAttackAt(cid) {
+  const me = players[myId]; if (!me) return;
+  send({ type: 'attack', territory: cid, attackRatio });
+  // Spawn visual animation from closest border pixel we own → target centroid
+  const fromC = featureCentroidScreen(
+    [...(me.territories)].find(tid => (adjacency[tid]||new Set()).has(cid)) || [...me.territories][0]
+  );
+  const toC = featureCentroidScreen(cid);
+  if (fromC && toC) {
+    attackAnims.set(Date.now() + Math.random(), {
+      from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
+      to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
+      progress: 0, color: me.color,
+    });
   }
-
-  if (found === null) {
-    toast('Cannot reach — separated by water', 'error', 1800);
-    return;
-  }
-
-  // Reconstruct path from found (my territory) → targetId
-  const path = [];
-  let cur = targetId;
-  while (cur !== found) {
-    path.unshift(cur);
-    cur = parent.get(cur);
-  }
-  // path is now [firstEnemy/unclaimed, ..., targetId]
-
-  if (path.length === 0) {
-    // target is directly adjacent, just normal attack
-    selectedTarget = targetId;
-    const btn = document.getElementById('attack-btn');
-    const ownerName = territories[targetId] && players[territories[targetId]] ? players[territories[targetId]].name : 'Unclaimed';
-    btn.disabled = false;
-    btn.textContent = `Attack ${ownerName} (${Math.round(attackRatio * 100)}% troops)`;
-    btn.className = 'attack-btn active';
-    return;
-  }
-
-  // Cancel any existing flood
-  if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
-
-  floodQueue = path.slice(); // copy
-  floodTarget = targetId;
-
-  toast(`Expanding ${path.length} territories…`, 'info', 2000);
-
-  // Fire first step immediately, then step every 400ms
-  fireNextFloodStep();
-  floodInterval = setInterval(() => {
-    if (floodQueue.length === 0) {
-      clearInterval(floodInterval);
-      floodInterval = null;
-      return;
-    }
-    fireNextFloodStep();
-  }, 400);
 }
 
-function fireNextFloodStep() {
-  const me = players[myId];
-  if (!me) return;
+// ══════════════════════════════════════════════
+//  FLOOD EXPANSION  (OpenFront-style)
+//  Fires attacks country-by-country along the
+//  BFS path. Each step waits for server
+//  confirmation before the next fires.
+// ══════════════════════════════════════════════
+let floodPath  = [];
+let floodTimer = null;
 
-  // Find the next territory in the queue that is still attackable
-  // (we may have already captured some via enclosure or previous steps)
-  while (floodQueue.length > 0) {
-    const nextId = floodQueue[0];
+function cancelFlood() {
+  if (floodTimer) { clearInterval(floodTimer); floodTimer = null; }
+  floodPath = [];
+  clearTarget();
+}
 
-    // If we already own it, skip
-    if (territories[nextId] === myId) {
-      floodQueue.shift();
-      continue;
-    }
+function startFlood(path) {
+  floodPath = path.slice();
+  toast(`Expanding ${path.length} territories…`, 'info', 2000);
+  floodTimer = setInterval(floodTick, 700);
+  floodTick();
+}
 
-    // Check adjacency to our current territory (may have grown)
-    const myTerr = me.territories;
-    let adj = false;
-    myTerr.forEach(tid => { if ((adjacency[tid] || new Set()).has(nextId)) adj = true; });
+function floodTick() {
+  const me = players[myId]; if (!me) return;
+  if (floodPath.length === 0) { cancelFlood(); return; }
 
-    if (!adj) {
-      // Not yet adjacent — wait for previous captures to propagate
-      return;
-    }
+  const nextId = floodPath[0];
 
-    // Fire the attack
-    floodQueue.shift();
-    selectedTarget = nextId;
+  // Already ours — skip forward
+  if (territories[nextId] === myId) { floodPath.shift(); floodTick(); return; }
 
-    send({ type: 'attack', territory: nextId, attackRatio });
-
-    // Spawn attack animation
-    let closestAdj = null, minDist = Infinity;
-    myTerr.forEach(tid => {
-      if ((adjacency[tid] || new Set()).has(nextId)) {
-        const c = featureCentroidScreen(tid);
-        if (!c) return;
-        const d = Math.hypot(c[0] - canvas.width/2, c[1] - canvas.height/2);
-        if (d < minDist) { minDist = d; closestAdj = tid; }
-      }
-    });
-    const fromC = closestAdj ? featureCentroidScreen(closestAdj) : null;
-    const toC = featureCentroidScreen(nextId);
-    if (fromC && toC) {
-      const animId = Date.now() + Math.random();
-      attackAnims.set(animId, {
-        from: [(fromC[0]-transform.x)/transform.k, (fromC[1]-transform.y)/transform.k],
-        to:   [(toC[0] -transform.x)/transform.k, (toC[1] -transform.y)/transform.k],
-        progress: 0,
-        color: me.color,
-      });
-    }
-
-    clearTarget();
-    return; // one step per interval tick
+  // Must be adjacent via pixel-derived adjacency
+  let adj = false;
+  for (const tid of me.territories) {
+    if ((adjacency[tid]||new Set()).has(nextId)) { adj = true; break; }
   }
+  if (!adj) return; // wait for previous capture to register
+
+  floodPath.shift();
+  fireAttackAt(nextId);
+  if (floodPath.length === 0) cancelFlood();
 }
 
 // ══════════════════════════════════════════════
@@ -1269,10 +1263,7 @@ function handleMsg(msg) {
         players[msg.playerId].dot = msg.geo;
       }
       if (msg.countryId !== undefined) {
-        const prev = territories[msg.countryId];
-        if (prev && players[prev]) players[prev].territories.delete(msg.countryId);
-        territories[msg.countryId] = msg.playerId;
-        if (players[msg.playerId]) players[msg.playerId].territories.add(msg.countryId);
+        captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
       }
       break;
 
@@ -1346,6 +1337,11 @@ function captureTerritory(id, newOwner, prevOwner) {
   // Assign to new owner
   territories[id] = newOwner;
   if (players[newOwner]) players[newOwner].territories.add(+id);
+  // Update pixel ownership for this country
+  for (const pidx of (countryPixels[+id] || new Set())) {
+    if (prev) delete pixOwner[pidx];
+    pixOwner[pidx] = newOwner;
+  }
   updateScoreboard();
   updateSelfCard();
 }
