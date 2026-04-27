@@ -732,7 +732,6 @@ function startFloodToCell(targetIdx) {
   const myPidx = getPlayerIdx(myId);
   if (gridOwner[targetIdx] === myPidx) return;
 
-  // Reachability check
   const testPath = bfsPathToTarget(targetIdx);
   if (!testPath) {
     toast('Unreachable — separated by water', 'error', 1800);
@@ -743,33 +742,31 @@ function startFloodToCell(targetIdx) {
   floodActive  = true;
   floodVisited = new Uint8Array(GRID_W * GRID_H);
 
-  // Target position for directional bias
-  const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
+  const tx = targetIdx % GRID_W, ty = Math.floor(targetIdx / GRID_W);
 
-  // Seed frontier from ALL our border tiles
-  // Use a priority queue: lower score = processed sooner
-  // Score = distance_to_target * (1 - bias) + noise
-  // bias=0.25 means 25% pull toward target, 75% pure BFS wave = natural flood
-  const BIAS = 0.30;
-  const myPidxLocal = myPidx;
-  const scored = [];
+  // BFS frontier — array of cellIdx, ordered by dist-to-target for directional feel
+  // but processed ALL-AT-ONCE each tick (no skipping = no gaps)
+  const myPidxL = myPidx;
+  const frontier = [];
   for (let i = 0; i < gridOwner.length; i++) {
-    if (gridOwner[i] !== myPidxLocal) continue;
+    if (gridOwner[i] !== myPidxL) continue;
     for (const n of cellNeighbors(i)) {
-      if (gridLand[n] && gridOwner[n] !== myPidxLocal && !floodVisited[n]) {
+      if (gridLand[n] && gridOwner[n] !== myPidxL && !floodVisited[n]) {
         floodVisited[n] = 1;
-        const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
-        const dist = Math.hypot(nx - tx, ny - ty);
-        // score = dist biased toward target + small random jitter for organic shape
-        const score = dist * BIAS + (1 - BIAS) * (Math.random() * 50) + Math.random() * 5;
-        scored.push([score, n]);
+        frontier.push(n);
       }
     }
   }
-  scored.sort((a, b) => a[0] - b[0]);
-  floodFrontier = scored;
+  // Sort by dist to target so expansion leads toward click
+  // Ties broken by small jitter so edges look organic not geometric
+  frontier.sort((a, b) => {
+    const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
+    const bx = b % GRID_W, by = Math.floor(b / GRID_W);
+    return (Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty)) + (Math.random()-0.5)*4;
+  });
+  floodFrontier = frontier;
 
-  floodInterval = setInterval(floodTick, 60);
+  floodInterval = setInterval(floodTick, 55);
   floodTick();
 }
 
@@ -777,17 +774,15 @@ function floodTick() {
   if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
   const myPidx = getPlayerIdx(myId);
   const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
-  const BIAS = 0.30;
 
-  // Each tick: claim a WAVE of tiles — all tiles within score band of the frontier head.
-  // This gives the simultaneous-wave feel (Minecraft water) while respecting priority order.
-  // Wave size scales with total frontier to stay fast when territory is large.
-  const waveSize = Math.max(20, Math.floor(floodFrontier.length * 0.12));
+  // Take a wave: enough tiles to feel fast but not instant
+  // Scale with frontier size — large frontiers advance faster
+  const waveSize = Math.max(15, Math.floor(floodFrontier.length * 0.08));
   const wave = floodFrontier.splice(0, waveSize);
+  const nextTiles = [];
 
-  for (const [, tileIdx] of wave) {
-    if (gridOwner[tileIdx] === myPidx) continue;  // race condition guard
-
+  for (const tileIdx of wave) {
+    if (gridOwner[tileIdx] === myPidx) continue;
     claimTile(tileIdx, myId);
 
     const cid = cellToCountry(tileIdx);
@@ -797,33 +792,41 @@ function floodTick() {
       send({ type: 'attack', territory: cid, attackRatio });
     }
 
-    // Expand frontier from newly captured tile — NO random skip, no gaps
     for (const n of cellNeighbors(tileIdx)) {
       if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
         floodVisited[n] = 1;
-        const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
-        const dist = Math.hypot(nx - tx, ny - ty);
-        const score = dist * BIAS + (1 - BIAS) * (Math.random() * 50) + Math.random() * 5;
-        // Insert in sorted position (binary search for efficiency)
-        let lo = 0, hi = floodFrontier.length;
-        while (lo < hi) {
-          const mid = (lo + hi) >> 1;
-          if (floodFrontier[mid][0] < score) lo = mid + 1; else hi = mid;
-        }
-        floodFrontier.splice(lo, 0, [score, n]);
+        nextTiles.push(n);
       }
     }
   }
 
-  updateSelfCard();
+  // Insert nextTiles into frontier in sorted order (closer to target first + jitter)
+  if (nextTiles.length > 0) {
+    nextTiles.sort((a, b) => {
+      const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
+      const bx = b % GRID_W, by = Math.floor(b / GRID_W);
+      return (Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty)) + (Math.random()-0.5)*4;
+    });
+    // Merge into existing frontier (already sorted)
+    for (const n of nextTiles) {
+      floodFrontier.push(n);
+    }
+    // Re-sort combined frontier periodically (every tick is fine at this scale)
+    // Only re-sort if frontier is small enough — for large fills BFS order is fine
+    if (floodFrontier.length < 1500) {
+      floodFrontier.sort((a, b) => {
+        const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
+        const bx = b % GRID_W, by = Math.floor(b / GRID_W);
+        return Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty);
+      });
+    }
+  }
 
-  if (floodTarget >= 0 && gridOwner[floodTarget] === myPidx) {
-    cancelFlood(); return;
-  }
-  if (floodFrontier.length === 0) {
-    cancelFlood(); return;
-  }
+  updateSelfCard();
+  if (floodTarget >= 0 && gridOwner[floodTarget] === myPidx) { cancelFlood(); return; }
+  if (floodFrontier.length === 0) { cancelFlood(); return; }
 }
+
 
 
 // ══════════════════════════════════════════════
@@ -1100,7 +1103,10 @@ function handleClick(cx, cy) {
       toast('Click on land to place your base', 'error', 2000);
       return;
     }
-    const geo = screenToGeo(cx, cy);
+    // Store dot at the geographic CENTER of the clicked grid cell
+    // so the pulsing dot renders exactly over the tile cluster.
+    const gx0 = cellIdx % GRID_W, gy0 = Math.floor(cellIdx / GRID_W);
+    const geo = gridProj.invert([gx0 + 0.5, gy0 + 0.5]);
     players[myId].dot = geo;
     myPlaced = true;
 
@@ -1286,7 +1292,7 @@ function captureTerritory(id, newOwner, prevOwner) {
   territories[id] = newOwner;
   if (players[newOwner]) players[newOwner].territories.add(+id);
 
-  // Sync all grid tiles belonging to this country
+  // Sync grid tiles for this country to new owner
   if (cellCountry) {
     const newPidx = getPlayerIdx(newOwner);
     for (let i = 0; i < GRID_W * GRID_H; i++) {
@@ -1301,6 +1307,12 @@ function captureTerritory(id, newOwner, prevOwner) {
       tileCounts[newOwner] = (tileCounts[newOwner] || 0) + 1;
     }
     pidxRgb[newPidx] = null;
+
+    // If opponent doesn't have a dot yet, find a tile in this country and derive one
+    if (newOwner !== myId && players[newOwner] && !players[newOwner].dot) {
+      const f = featureMap[+id];
+      if (f) players[newOwner].dot = d3.geoCentroid(f);
+    }
   }
 
   updateScoreboard();
@@ -1415,6 +1427,14 @@ function handleMsg(msg) {
 
     case 'territory_captured':
       captureTerritory(msg.territory, msg.attackerId, msg.defenderId);
+      // Ensure attacker has a dot placed (may not yet for opponents who joined mid-game)
+      if (msg.attackerId !== myId && players[msg.attackerId] && !players[msg.attackerId].dot) {
+        // Find centroid of one of their tiles and use that as dot
+        const f = featureMap[msg.territory];
+        if (f) {
+          players[msg.attackerId].dot = d3.geoCentroid(f);
+        }
+      }
       checkVictory();
       break;
 
