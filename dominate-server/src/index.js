@@ -154,10 +154,9 @@ export class GameRoom {
 
       // ── PLACE DOT ────────────────────────────────────────────────────────
       case 'place_dot': {
-        const { geo, countryId } = msg;
+        const { geo, countryId, seedTiles } = msg;   // ← add seedTiles here
         if (countryId !== undefined) {
           const prev = this.territories[countryId];
-          // Don't steal another player's already-placed start
           if (!prev) {
             this.territories[countryId] = playerId;
           }
@@ -165,10 +164,8 @@ export class GameRoom {
         player.lastTroops = 50;
         player.lastSync   = Date.now();
 
-        this.broadcast({ type: 'dot_placed', playerId, geo, countryId: countryId ?? null });
-
-        // Transition to game once placement phase ends (host triggers this manually
-        // or after a timeout — handled client-side; server accepts phase_change)
+        this.broadcast({ type: 'dot_placed', playerId, geo, countryId: countryId ?? null, seedTiles: seedTiles ?? [] });
+        // ↑ forward seedTiles so receiving clients don't need to re-seed from geo
         break;
       }
 
