@@ -48,11 +48,9 @@
     padding: 48px 24px;
   }
 
-  /* ── VIEWS ── */
   .view { display: none; flex-direction: column; align-items: center; width: 100%; }
   .view.active { display: flex; }
 
-  /* LOGO */
   .logo {
     display: flex; flex-direction: column; align-items: center;
     gap: 16px; margin-bottom: 48px;
@@ -67,7 +65,6 @@
   .logo-rule-line { flex: 1; height: 1px; background: var(--gold-dim); }
   .logo-rule-dot { width: 4px; height: 4px; background: var(--gold); transform: rotate(45deg); flex-shrink: 0; }
 
-  /* CARD */
   .card {
     width: 100%; max-width: 400px;
     background: rgba(17,17,17,0.92);
@@ -87,7 +84,6 @@
     border-bottom: 1px solid var(--gold); border-right: 1px solid var(--gold);
   }
 
-  /* MODE TOGGLE */
   .mode-toggle {
     display: grid; grid-template-columns: 1fr 1fr;
     gap: 2px; margin-bottom: 28px;
@@ -118,7 +114,6 @@
     padding: 2px 6px; margin-top: 4px;
   }
 
-  /* FIELDS */
   .field { margin-bottom: 14px; }
   .field label {
     display: block; font-family: 'Cinzel', serif;
@@ -200,7 +195,6 @@
   }
   .footer-links a:hover { color: var(--gold); }
 
-  /* ── LOBBY VIEW ── */
   .lobby-card {
     width: 100%; max-width: 500px;
     background: rgba(17,17,17,0.92);
@@ -225,7 +219,6 @@
     margin-bottom: 24px; padding-bottom: 16px;
     border-bottom: 1px solid rgba(201,168,76,0.12);
   }
-  .lobby-header-left {}
   .lobby-title {
     font-family: 'Cinzel', serif; font-size: 13px; letter-spacing: 0.2em;
     text-transform: uppercase; color: var(--gold); display: block;
@@ -244,13 +237,8 @@
     letter-spacing: 0.15em; color: var(--gold-light);
     cursor: pointer; position: relative;
   }
-  .lobby-code-value:hover::after {
-    content: 'copied!'; position: absolute; right: 0; top: -22px;
-    font-size: 11px; letter-spacing: 0.1em; color: var(--green); white-space: nowrap;
-  }
   .lobby-code-value.copied::after { content: 'copied!'; position: absolute; right: 0; top: -22px; font-size: 11px; letter-spacing: 0.1em; color: var(--green); white-space: nowrap; }
 
-  /* CONNECTION STATUS */
   .conn-banner {
     padding: 10px 14px; margin-bottom: 18px;
     border: 1px solid; font-family: 'Cinzel', serif;
@@ -266,7 +254,6 @@
   }
   .conn-banner.connected .conn-dot { animation: none; }
 
-  /* PLAYER LIST */
   .player-list-label {
     font-family: 'Cinzel', serif; font-size: 9px; letter-spacing: 0.28em;
     text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; display: block;
@@ -296,7 +283,6 @@
   }
   .badge-host  { color: var(--gold); border-color: rgba(201,168,76,0.4); }
   .badge-you   { color: var(--text-muted); border-color: rgba(107,100,86,0.4); }
-  .badge-ready { color: var(--green); border-color: rgba(76,170,110,0.4); }
   .player-ping { font-family: 'Cinzel', serif; font-size: 9px; color: var(--text-muted); }
 
   .player-slot {
@@ -306,7 +292,6 @@
     font-size: 15px; color: rgba(107,100,86,0.5);
   }
 
-  /* LOBBY ACTIONS */
   .lobby-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
   .lobby-settings-row {
     display: flex; gap: 8px; align-items: center;
@@ -327,7 +312,6 @@
   }
   .danger-btn:hover { border-color: var(--red); color: var(--red); background: rgba(201,76,76,0.06); }
 
-  /* TOAST */
   #toast-container { position: fixed; top: 24px; left: 50%; transform: translateX(-50%); z-index: 999; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
   .toast {
     font-family: 'Cinzel', serif; font-size: 10px; letter-spacing: 0.18em;
@@ -339,7 +323,6 @@
   .toast.success { border-color: rgba(76,170,110,0.4); color: var(--green); background: rgba(8,8,8,0.9); }
   .toast.error   { border-color: rgba(201,76,76,0.4);  color: var(--red);   background: rgba(8,8,8,0.9); }
   @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
-
   @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 
   @media (max-width: 480px) {
@@ -347,15 +330,6 @@
     .logo-name { font-size: 30px; }
   }
 
-  /* spinner inline */
-  .spinner {
-    display: inline-block; width: 12px; height: 12px;
-    border: 1px solid rgba(201,168,76,0.3); border-top-color: var(--gold);
-    border-radius: 50%; animation: spin 0.7s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Waiting text pulse */
   .waiting-txt { font-family: 'EB Garamond', serif; font-style: italic; font-size: 14px; color: var(--text-muted); text-align: center; padding: 20px 0; animation: pulse 2s ease-in-out infinite; }
 </style>
 </head>
@@ -366,9 +340,7 @@
 
 <div class="page">
 
-  <!-- ══════════════════════════════════════
-       VIEW 1 · LOBBY SETUP
-  ══════════════════════════════════════ -->
+  <!-- VIEW 1 · LOBBY SETUP -->
   <div class="view active" id="view-setup">
     <div class="logo">
       <div class="logo-crown">
@@ -419,7 +391,6 @@
         </select>
       </div>
 
-      <!-- CUSTOM PANEL -->
       <div id="panel-custom">
         <div class="field">
           <label>Max players</label>
@@ -459,7 +430,6 @@
         </div>
       </div>
 
-      <!-- RANKED PANEL -->
       <div id="panel-ranked" style="display:none;">
         <div class="field">
           <label>Queue size</label>
@@ -490,9 +460,7 @@
     </ul>
   </div>
 
-  <!-- ══════════════════════════════════════
-       VIEW 2 · ACTIVE LOBBY
-  ══════════════════════════════════════ -->
+  <!-- VIEW 2 · ACTIVE LOBBY -->
   <div class="view" id="view-lobby">
     <div class="logo" style="margin-bottom:32px;">
       <div class="logo-crown">
@@ -514,7 +482,6 @@
     </div>
 
     <div class="lobby-card">
-      <!-- header -->
       <div class="lobby-header">
         <div class="lobby-header-left">
           <span class="lobby-title" id="lobby-mode-label">Custom Lobby</span>
@@ -526,17 +493,14 @@
         </div>
       </div>
 
-      <!-- connection status -->
       <div class="conn-banner connecting" id="conn-banner">
         <div class="conn-dot"></div>
         <span id="conn-text">Connecting to server…</span>
       </div>
 
-      <!-- players -->
       <span class="player-list-label" id="player-count-label">Players — 0</span>
       <ul class="player-list" id="player-list"></ul>
 
-      <!-- lobby actions -->
       <div class="lobby-actions">
         <div class="lobby-settings-row">
           <span>Bots</span>
@@ -547,12 +511,10 @@
           <span id="lobby-maxplayers-display">32</span>
         </div>
 
-        <!-- Host only: start button -->
         <button class="submit-btn" id="start-btn" onclick="handleStart()" style="display:none;">
           Start the campaign →
         </button>
 
-        <!-- Non-host: waiting -->
         <p class="waiting-txt" id="waiting-txt" style="display:none;">Awaiting the host to begin…</p>
 
         <button class="danger-btn" onclick="handleLeave()">Leave lobby</button>
@@ -560,31 +522,23 @@
     </div>
   </div>
 
-</div><!-- /page -->
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
 <script>
-// ══════════════════════════════════════════════════════
-//  CONFIG
-// ══════════════════════════════════════════════════════
 const SERVER_WS   = 'wss://dominate-server.maiyo-studios.workers.dev';
 const SERVER_HTTP = 'https://dominate-server.maiyo-studios.workers.dev';
 
-// ══════════════════════════════════════════════════════
-//  STATE
-// ══════════════════════════════════════════════════════
 let ws          = null;
-let myId        = null;          // assigned by server
+let myId        = null;
 let isHost      = false;
 let roomCode    = null;
-let players     = [];            // [{id, name, isHost, ping}]
+let players     = [];
 let currentMode = 'custom';
 let lobbySettings = {};
 
-// ══════════════════════════════════════════════════════
-//  WORLD MAP
-// ══════════════════════════════════════════════════════
+// ── WORLD MAP ──────────────────────────────────────────
 const canvas = document.getElementById('map-canvas');
 const ctx    = canvas.getContext('2d');
 let drawPending = false;
@@ -607,16 +561,12 @@ async function drawMap() {
     const path    = d3.geoPath(projection, ctx);
     const land    = topojson.merge(world, world.objects.countries.geometries);
     const borders = topojson.mesh(world, world.objects.countries, (a, b) => a !== b);
-
     ctx.beginPath(); path(land);
     ctx.fillStyle = 'rgba(201,168,76,0.05)'; ctx.fill();
-
     ctx.beginPath(); path(borders);
     ctx.strokeStyle = 'rgba(201,168,76,0.15)'; ctx.lineWidth = 0.5; ctx.stroke();
-
     ctx.beginPath(); path(land);
     ctx.strokeStyle = 'rgba(201,168,76,0.4)'; ctx.lineWidth = 1.0; ctx.stroke();
-
     ctx.beginPath(); path(d3.geoGraticule()());
     ctx.strokeStyle = 'rgba(201,168,76,0.04)'; ctx.lineWidth = 0.5; ctx.stroke();
   } catch(e) { console.warn('Map load failed', e); }
@@ -626,9 +576,7 @@ async function drawMap() {
 window.addEventListener('resize', resize);
 resize();
 
-// ══════════════════════════════════════════════════════
-//  TOAST
-// ══════════════════════════════════════════════════════
+// ── TOAST ──────────────────────────────────────────────
 function toast(msg, type = 'info', dur = 3000) {
   const el = document.createElement('div');
   el.className = `toast ${type}`;
@@ -637,9 +585,7 @@ function toast(msg, type = 'info', dur = 3000) {
   setTimeout(() => el.remove(), dur);
 }
 
-// ══════════════════════════════════════════════════════
-//  UI — SETUP VIEW
-// ══════════════════════════════════════════════════════
+// ── UI SETUP ───────────────────────────────────────────
 function setMode(m) {
   currentMode = m;
   document.getElementById('btn-custom').classList.toggle('active', m === 'custom');
@@ -659,9 +605,7 @@ function setAction(a) {
   document.getElementById('play-btn').textContent = a === 'join' ? 'Join lobby →' : 'Enter the field →';
 }
 
-// ══════════════════════════════════════════════════════
-//  ROOM CODE HELPERS
-// ══════════════════════════════════════════════════════
+// ── ROOM CODE ──────────────────────────────────────────
 const WORDS = ['IRON','GOLD','SIEGE','CROWN','BLADE','STORM','FORGE','STEEL','TOWER','FLAME','MARCH','REALM','SWORD','AEGIS','FIELD','VALOR','LANCE','EMBER'];
 
 function generateCode() {
@@ -671,22 +615,16 @@ function generateCode() {
 }
 
 function normaliseCode(raw) {
-  // accept WORD·NNNN  WORD-NNNN  WORDNNNN  etc.
   return raw.replace(/[·\-\s]/g, '').toUpperCase();
 }
 
-// ══════════════════════════════════════════════════════
-//  WEBSOCKET
-// ══════════════════════════════════════════════════════
+// ── WEBSOCKET ──────────────────────────────────────────
 function connectWS(code, username, host, settings) {
   setConnBanner('connecting', 'Connecting to server…');
-
-  const url = `${SERVER_WS}/room/${code}`;
-  ws = new WebSocket(url);
+  ws = new WebSocket(`${SERVER_WS}/room/${code}`);
 
   ws.addEventListener('open', () => {
     setConnBanner('connecting', 'Authenticating…');
-    // Announce ourselves
     send({ type: 'join', username, isHost: host, settings });
   });
 
@@ -700,7 +638,6 @@ function connectWS(code, username, host, settings) {
   ws.addEventListener('close', e => {
     setConnBanner('error', `Disconnected (${e.code})`);
     toast('Disconnected from server', 'error');
-    // After 3 s, allow going back
     setTimeout(() => {
       if (document.getElementById('view-lobby').classList.contains('active')) {
         showToast_backButton();
@@ -715,36 +652,46 @@ function connectWS(code, username, host, settings) {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-// ══════════════════════════════════════════════════════
-//  SERVER MESSAGE HANDLER
-// ══════════════════════════════════════════════════════
+// ── SERVER MESSAGE HANDLER ─────────────────────────────
 function handleServerMessage(msg) {
   console.log('[WS ←]', msg);
 
   switch (msg.type) {
 
-    // Server confirms join, gives us our ID
     case 'welcome':
       myId   = msg.id;
       isHost = msg.isHost;
+
+      // ── FIX: read the players list from the welcome payload ──
+      // The server embeds the full player list in 'welcome' but the old
+      // code never read it, so the lobby always showed 0 players.
+      if (msg.players && Array.isArray(msg.players)) {
+        players = msg.players;
+      } else {
+        // Fallback: at minimum add ourselves so we show up immediately
+        players = [{
+          id: myId,
+          name: document.getElementById('username').value.trim(),
+          isHost: isHost,
+          ping: null,
+        }];
+      }
+
+      renderPlayerList();
       setConnBanner('connected', `Connected · ${players.length} player${players.length !== 1 ? 's' : ''}`);
       toast(isHost ? 'Lobby created' : 'Joined lobby', 'success');
       updateHostControls();
       break;
 
-    // Full player list snapshot
     case 'playerList':
       players = msg.players;
       renderPlayerList();
       updateConnCount();
       break;
 
-    // Someone joined
     case 'playerJoined':
       if (!players.find(p => p.id === msg.player.id)) {
         players.push(msg.player);
@@ -754,7 +701,6 @@ function handleServerMessage(msg) {
       }
       break;
 
-    // Someone left
     case 'playerLeft':
       players = players.filter(p => p.id !== msg.id);
       renderPlayerList();
@@ -762,7 +708,6 @@ function handleServerMessage(msg) {
       if (msg.name) toast(`${msg.name} left the field`, 'info', 2500);
       break;
 
-    // Host transferred
     case 'hostTransfer':
       players = players.map(p => ({ ...p, isHost: p.id === msg.newHostId }));
       isHost  = myId === msg.newHostId;
@@ -771,21 +716,17 @@ function handleServerMessage(msg) {
       if (isHost) toast('You are now the host', 'info');
       break;
 
-    // Host starts the game
     case 'gameStart':
       toast('The campaign begins!', 'success', 4000);
       handleGameStart(msg);
       break;
 
-    // Server error
     case 'error':
       toast(msg.message || 'Server error', 'error');
       setConnBanner('error', msg.message || 'Server error');
       break;
 
-    // Ping response
     case 'pong':
-      // could compute latency here
       break;
 
     default:
@@ -793,14 +734,12 @@ function handleServerMessage(msg) {
   }
 }
 
-// ══════════════════════════════════════════════════════
-//  RENDER HELPERS
-// ══════════════════════════════════════════════════════
+// ── RENDER ─────────────────────────────────────────────
 function renderPlayerList() {
   const ul = document.getElementById('player-list');
   ul.innerHTML = '';
 
-  players.forEach((p, i) => {
+  players.forEach(p => {
     const isMe = p.id === myId;
     const li   = document.createElement('li');
     li.className = `player-item${isMe ? ' me' : ''}`;
@@ -821,9 +760,8 @@ function renderPlayerList() {
     ul.appendChild(li);
   });
 
-  // Empty slot hints
-  const max    = lobbySettings.maxPlayers || 8;
-  const slots  = Math.max(0, Math.min(max - players.length, 4));
+  const max   = lobbySettings.maxPlayers || 8;
+  const slots = Math.max(0, Math.min(max - players.length, 4));
   for (let i = 0; i < slots; i++) {
     const li = document.createElement('li');
     li.className = 'player-slot';
@@ -839,7 +777,7 @@ function updateConnCount() {
 }
 
 function updateHostControls() {
-  document.getElementById('start-btn').style.display  = isHost ? 'block' : 'none';
+  document.getElementById('start-btn').style.display   = isHost ? 'block' : 'none';
   document.getElementById('waiting-txt').style.display = isHost ? 'none'  : 'block';
 }
 
@@ -861,9 +799,7 @@ function copyCode(el) {
   });
 }
 
-// ══════════════════════════════════════════════════════
-//  PLAY BUTTON
-// ══════════════════════════════════════════════════════
+// ── PLAY BUTTON ────────────────────────────────────────
 function handlePlay() {
   const username = document.getElementById('username').value.trim();
   if (!username) {
@@ -879,10 +815,10 @@ function handlePlay() {
     return;
   }
 
-  const action   = document.getElementById('lobby-action').value;
-  const map      = document.getElementById('map-select').value;
-  const maxPl    = parseInt(document.getElementById('player-count').value);
-  const bots     = parseInt(document.getElementById('bot-count').value);
+  const action = document.getElementById('lobby-action').value;
+  const map    = document.getElementById('map-select').value;
+  const maxPl  = parseInt(document.getElementById('player-count').value);
+  const bots   = parseInt(document.getElementById('bot-count').value);
 
   if (action === 'create') {
     roomCode = generateCode();
@@ -902,7 +838,6 @@ function handlePlay() {
     lobbySettings = { map, maxPlayers: maxPl, bots };
   }
 
-  // Switch to lobby view
   showView('lobby');
   populateLobbyMeta(map, bots, maxPl);
   connectWS(roomCode, username, isHost, lobbySettings);
@@ -910,25 +845,22 @@ function handlePlay() {
 
 function populateLobbyMeta(map, bots, maxPl) {
   const mapLabel = map.charAt(0).toUpperCase() + map.slice(1);
-  document.getElementById('lobby-map-label').textContent  = `Map · ${mapLabel}`;
+  document.getElementById('lobby-map-label').textContent      = `Map · ${mapLabel}`;
   document.getElementById('lobby-bots-display').textContent   = `${bots} AI commander${bots !== 1 ? 's' : ''}`;
   document.getElementById('lobby-maxplayers-display').textContent = maxPl;
-  document.getElementById('lobby-mode-label').textContent = isHost ? 'Custom Lobby' : 'Joining Lobby';
+  document.getElementById('lobby-mode-label').textContent     = isHost ? 'Custom Lobby' : 'Joining Lobby';
 
-  // Show code (with separator for readability)
   const display = roomCode.replace(/([A-Z]+)(\d+)/, '$1·$2');
   document.getElementById('lobby-code-display').textContent = display;
 
-  // Reset player list
+  // Clear list — will be repopulated when 'welcome' arrives
   players = [];
   myId    = null;
   renderPlayerList();
   updateHostControls();
 }
 
-// ══════════════════════════════════════════════════════
-//  START / LEAVE
-// ══════════════════════════════════════════════════════
+// ── START / LEAVE ──────────────────────────────────────
 function handleStart() {
   if (!isHost) return;
   send({ type: 'start', settings: lobbySettings });
@@ -955,22 +887,17 @@ function handleLeave() {
 }
 
 function showToast_backButton() {
-  // Give user a way back without a button
   toast('Connection lost — leaving lobby…', 'error', 3000);
   setTimeout(handleLeave, 3000);
 }
 
-// ══════════════════════════════════════════════════════
-//  VIEW SWITCHER
-// ══════════════════════════════════════════════════════
+// ── VIEW SWITCHER ──────────────────────────────────────
 function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${name}`).classList.add('active');
 }
 
-// ══════════════════════════════════════════════════════
-//  LIVE COUNTER ANIMATION
-// ══════════════════════════════════════════════════════
+// ── LIVE COUNTER ───────────────────────────────────────
 const liveEl = document.getElementById('live-num');
 let n = 0;
 const iv = setInterval(() => {
@@ -979,13 +906,9 @@ const iv = setInterval(() => {
   if (n >= 2841) clearInterval(iv);
 }, 16);
 
-// ══════════════════════════════════════════════════════
-//  PING LOOP (keep-alive + latency)
-// ══════════════════════════════════════════════════════
+// ── PING LOOP ──────────────────────────────────────────
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    send({ type: 'ping', t: Date.now() });
-  }
+  if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'ping', t: Date.now() });
 }, 15000);
 </script>
 </body>
