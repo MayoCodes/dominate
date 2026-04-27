@@ -374,6 +374,8 @@ let players = {};
 // Country-level ownership (for server protocol)
 let territories = {};
 let activeAttacks = new Map();
+let tileCounts    = {};    // playerId → owned tile count (cached, updated on claim)
+let landTileTotal = 0;     // total land tiles (computed once after rasterize)
 
 let topoData = null, features = [], featureMap = {}, adjacency = {};
 let cellCountry = null;  // Uint16Array  cell → country id
@@ -500,7 +502,9 @@ function rasterizeGrid() {
   for (let i = 0; i < GRID_W * GRID_H; i++) {
     gridLand[i] = data[i * 4] > 128 ? 1 : 0;
   }
-  console.log('[GRID] rasterized', GRID_W * GRID_H, 'tiles');
+  landTileTotal = 0;
+  for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTileTotal++;
+  console.log('[GRID] rasterized', GRID_W * GRID_H, 'tiles,', landTileTotal, 'land');
 }
 
 // Build cellCountry: each grid cell → country id (for server protocol)
@@ -604,7 +608,16 @@ function getPidxRgb(pidx) {
 }
 
 function claimTile(idx, pid) {
-  gridOwner[idx] = getPlayerIdx(pid);
+  const prevPidx = gridOwner[idx];
+  const newPidx  = getPlayerIdx(pid);
+  if (prevPidx === newPidx) return;
+  // Decrement previous owner
+  if (prevPidx) {
+    const prevPid = idxPlayer[prevPidx];
+    if (prevPid) tileCounts[prevPid] = (tileCounts[prevPid] || 1) - 1;
+  }
+  gridOwner[idx] = newPidx;
+  tileCounts[pid] = (tileCounts[pid] || 0) + 1;
 }
 
 // Seed starting tiles as a small irregular blob (circle + noise, no diamond)
@@ -618,7 +631,17 @@ function seedPlayerTiles(startIdx, pid, radius) {
   const target  = Math.PI * radius * radius | 0; // ~πr² tiles
   while (queue.length > 0 && claimed < target) {
     const idx = queue.splice(Math.floor(Math.random() * Math.min(queue.length, 4)), 1)[0];
-    if (gridLand[idx]) { gridOwner[idx] = pidx; claimed++; }
+    if (gridLand[idx] && gridOwner[idx] !== pidx) {
+      // Track ownership change for tileCounts
+      const prevPidx = gridOwner[idx];
+      if (prevPidx) {
+        const prevPid = idxPlayer[prevPidx];
+        if (prevPid) tileCounts[prevPid] = (tileCounts[prevPid] || 1) - 1;
+      }
+      gridOwner[idx] = pidx;
+      tileCounts[pid] = (tileCounts[pid] || 0) + 1;
+      claimed++;
+    }
     for (const n of cellNeighbors(idx)) {
       if (!visited.has(n)) {
         visited.add(n);
@@ -709,7 +732,7 @@ function startFloodToCell(targetIdx) {
   const myPidx = getPlayerIdx(myId);
   if (gridOwner[targetIdx] === myPidx) return;
 
-  // Quick reachability check via BFS
+  // Reachability check
   const testPath = bfsPathToTarget(targetIdx);
   if (!testPath) {
     toast('Unreachable — separated by water', 'error', 1800);
@@ -720,13 +743,16 @@ function startFloodToCell(targetIdx) {
   floodActive  = true;
   floodVisited = new Uint8Array(GRID_W * GRID_H);
 
-  // Target grid coords — used for directional biasing
+  // Target position for directional bias
   const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
 
-  // Seed frontier: border tiles, pre-scored by distance to target
-  // We store [score, cellIdx] so we can sort the wave each tick
+  // Seed frontier from ALL our border tiles
+  // Use a priority queue: lower score = processed sooner
+  // Score = distance_to_target * (1 - bias) + noise
+  // bias=0.25 means 25% pull toward target, 75% pure BFS wave = natural flood
+  const BIAS = 0.30;
   const myPidxLocal = myPidx;
-  const frontier = [];
+  const scored = [];
   for (let i = 0; i < gridOwner.length; i++) {
     if (gridOwner[i] !== myPidxLocal) continue;
     for (const n of cellNeighbors(i)) {
@@ -734,16 +760,16 @@ function startFloodToCell(targetIdx) {
         floodVisited[n] = 1;
         const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
         const dist = Math.hypot(nx - tx, ny - ty);
-        frontier.push([dist, n]);
+        // score = dist biased toward target + small random jitter for organic shape
+        const score = dist * BIAS + (1 - BIAS) * (Math.random() * 50) + Math.random() * 5;
+        scored.push([score, n]);
       }
     }
   }
-  // Sort ascending by distance — closest to target expand first
-  frontier.sort((a, b) => a[0] - b[0]);
-  floodFrontier = frontier;
+  scored.sort((a, b) => a[0] - b[0]);
+  floodFrontier = scored;
 
-  // Wave every 80ms — water-like pacing
-  floodInterval = setInterval(floodTick, 80);
+  floodInterval = setInterval(floodTick, 60);
   floodTick();
 }
 
@@ -751,34 +777,16 @@ function floodTick() {
   if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
   const myPidx = getPlayerIdx(myId);
   const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
+  const BIAS = 0.30;
 
-  // Each tick: claim the CLOSEST wave of tiles (within a distance band)
-  // This makes expansion rush toward the target, then fill out sideways
-  const currentWave = floodFrontier;
-  floodFrontier = [];
-  const nextBatch = [];
+  // Each tick: claim a WAVE of tiles — all tiles within score band of the frontier head.
+  // This gives the simultaneous-wave feel (Minecraft water) while respecting priority order.
+  // Wave size scales with total frontier to stay fast when territory is large.
+  const waveSize = Math.max(20, Math.floor(floodFrontier.length * 0.12));
+  const wave = floodFrontier.splice(0, waveSize);
 
-  // Take tiles from the front of the sorted array that are within ~4 cells of the leading edge
-  const leadDist = currentWave.length > 0 ? currentWave[0][0] : 0;
-  const band = Math.max(8, leadDist * 0.15 + 4); // adaptive band width
-  let i = 0;
-  while (i < currentWave.length && (currentWave[i][0] <= leadDist + band)) {
-    nextBatch.push(currentWave[i]);
-    i++;
-  }
-  // Keep anything beyond the band for next tick
-  floodFrontier = currentWave.slice(i);
-
-  for (const [, tileIdx] of nextBatch) {
-    if (gridOwner[tileIdx] === myPidx) continue;
-
-    // Add slight randomness — skip ~8% of tiles so edges look organic not geometric
-    if (Math.random() < 0.08 && tileIdx !== floodTarget) {
-      // Defer: put back in frontier  
-      const nx = tileIdx % GRID_W, ny = Math.floor(tileIdx / GRID_W);
-      floodFrontier.push([Math.hypot(nx - tx, ny - ty) + Math.random() * 3, tileIdx]);
-      continue;
-    }
+  for (const [, tileIdx] of wave) {
+    if (gridOwner[tileIdx] === myPidx) continue;  // race condition guard
 
     claimTile(tileIdx, myId);
 
@@ -789,19 +797,23 @@ function floodTick() {
       send({ type: 'attack', territory: cid, attackRatio });
     }
 
-    // Expand frontier from newly captured tile
+    // Expand frontier from newly captured tile — NO random skip, no gaps
     for (const n of cellNeighbors(tileIdx)) {
       if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
         floodVisited[n] = 1;
-        const nx2 = n % GRID_W, ny2 = Math.floor(n / GRID_W);
-        const dist = Math.hypot(nx2 - tx, ny2 - ty);
-        floodFrontier.push([dist, n]);
+        const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
+        const dist = Math.hypot(nx - tx, ny - ty);
+        const score = dist * BIAS + (1 - BIAS) * (Math.random() * 50) + Math.random() * 5;
+        // Insert in sorted position (binary search for efficiency)
+        let lo = 0, hi = floodFrontier.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (floodFrontier[mid][0] < score) lo = mid + 1; else hi = mid;
+        }
+        floodFrontier.splice(lo, 0, [score, n]);
       }
     }
   }
-
-  // Keep frontier sorted for next tick
-  floodFrontier.sort((a, b) => a[0] - b[0]);
 
   updateSelfCard();
 
@@ -812,6 +824,7 @@ function floodTick() {
     cancelFlood(); return;
   }
 }
+
 
 // ══════════════════════════════════════════════
 //  DRAW LOOP
@@ -1092,7 +1105,7 @@ function handleClick(cx, cy) {
     myPlaced = true;
 
     // Seed initial territory
-    seedPlayerTiles(cellIdx, myId, 3);
+    seedPlayerTiles(cellIdx, myId, 5);
 
     // Register with server (country-level)
     const cid = cellToCountry(cellIdx);
@@ -1230,16 +1243,10 @@ function checkEnclosures() {
 }
 
 function checkVictory() {
-  const total = GRID_W * GRID_H;
-  let landTotal = 0;
-  for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
-
+  const landTotal = landTileTotal || 1;
   for (const [pid, p] of Object.entries(players)) {
-    const pidx = playerIdx[pid];
-    if (!pidx) continue;
-    let owned = 0;
-    for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
-    const pct = landTotal > 0 ? owned / landTotal : 0;
+    const owned = tileCounts[pid] || 0;
+    const pct = owned / landTotal;
     if (pct >= WIN_PCT) {
       document.getElementById('victory-sub').textContent = pid === myId
         ? `You have conquered ${Math.round(pct * 100)}% of the world.`
@@ -1256,11 +1263,8 @@ const ptt = document.getElementById('player-tooltip');
 
 function showPlayerTooltip(id, cx, cy) {
   const p = players[id]; if (!p) return;
-  const pidx = playerIdx[id];
-  let owned = 0;
-  if (pidx) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
-  let landTotal = 0;
-  for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
+  const owned = tileCounts[id] || 0;
+  const landTotal = landTileTotal || 1;
   const pct = landTotal > 0 ? ((owned / landTotal) * 100).toFixed(1) : 0;
 
   document.getElementById('ptt-name').textContent        = p.name;
@@ -1284,12 +1288,19 @@ function captureTerritory(id, newOwner, prevOwner) {
 
   // Sync all grid tiles belonging to this country
   if (cellCountry) {
-    const pidx = getPlayerIdx(newOwner);
+    const newPidx = getPlayerIdx(newOwner);
     for (let i = 0; i < GRID_W * GRID_H; i++) {
-      if (cellCountry[i] === +id) gridOwner[i] = pidx;
+      if (cellCountry[i] !== +id) continue;
+      const prevPidx = gridOwner[i];
+      if (prevPidx === newPidx) continue;
+      if (prevPidx) {
+        const prevPid = idxPlayer[prevPidx];
+        if (prevPid) tileCounts[prevPid] = (tileCounts[prevPid] || 1) - 1;
+      }
+      gridOwner[i] = newPidx;
+      tileCounts[newOwner] = (tileCounts[newOwner] || 0) + 1;
     }
-    // Invalidate color cache for this pidx
-    pidxRgb[pidx] = null;
+    pidxRgb[newPidx] = null;
   }
 
   updateScoreboard();
@@ -1436,13 +1447,9 @@ function handleMsg(msg) {
 // ══════════════════════════════════════════════
 function updateSelfCard() {
   const me = players[myId]; if (!me) return;
-  // Count our tiles
-  const pidx = playerIdx[myId];
-  let tileCount = 0;
-  if (pidx) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) tileCount++;
 
   document.getElementById('self-name').textContent        = me.name;
-  document.getElementById('self-territories').textContent = tileCount;
+  document.getElementById('self-territories').textContent = tileCounts[myId] || 0;
   document.getElementById('self-troops').textContent      = fmtNum(Math.floor(me.troops || 0));
   document.getElementById('self-max').textContent         = fmtNum(me.maxTroops || 0);
   document.getElementById('hud-gold').textContent         = fmtNum(Math.floor(me.gold || 0));
@@ -1453,14 +1460,9 @@ function updateScoreboard() {
   const list = document.getElementById('score-list');
   list.innerHTML = '';
 
-  let landTotal = 0;
-  if (gridLand) for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTotal++;
-
+  const landTotal = landTileTotal || 1;
   const rows = Object.entries(players).map(([id, p]) => {
-    const pidx = playerIdx[id];
-    let owned = 0;
-    if (pidx && gridOwner) for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) owned++;
-    return { id, p, owned };
+    return { id, p, owned: tileCounts[id] || 0 };
   }).sort((a, b) => b.owned - a.owned);
 
   rows.forEach(({ id, p, owned }) => {
