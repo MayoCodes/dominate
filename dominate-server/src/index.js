@@ -23,9 +23,6 @@ export default {
 };
 
 // ── DURABLE OBJECT ──
-// No tick loop — purely event-driven.
-// Clients run the troop formula locally (100ms ticks, deterministic).
-// Server only acts when territory ownership changes.
 export class GameRoom {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -35,10 +32,8 @@ export class GameRoom {
     this.hostId    = null;
     this.gamePhase = 'placement'; // 'placement' | 'game' | 'ended'
 
-    // Authoritative territory ownership: countryId → playerId
     this.territories = {};
 
-    // Active attacks: attackId → { attackerId, territory, troops, startedAt, defenderId }
     this.attacks  = new Map();
     this._atkCtr  = 0;
 
@@ -54,14 +49,12 @@ export class GameRoom {
     return Math.max(1000, terrCount * 100);
   }
 
-  // Estimate a player's current troops by fast-forwarding the formula
-  // from their last sync point. Used for loose anti-cheat on attacks.
   _estimateTroops(playerId) {
     const p = this.players.get(playerId);
     if (!p) return 0;
     const terrCount = Object.values(this.territories).filter(o => o === playerId).length;
     const max       = GameRoom.maxTroops(terrCount);
-    const ticks     = Math.min((Date.now() - p.lastSync) / 100, 600); // cap 60s
+    const ticks     = Math.min((Date.now() - p.lastSync) / 100, 600);
     let troops = p.lastTroops ?? 50;
     for (let i = 0; i < ticks; i++) {
       troops = Math.min(troops + GameRoom.troopGain(troops, max), max);
@@ -135,7 +128,6 @@ export class GameRoom {
           this.settings.maxPlayers = msg.settings.maxPlayers ?? this.settings.maxPlayers;
         }
 
-        // Send full room state to this player
         player.ws.send(JSON.stringify({
           type: 'welcome',
           id: playerId,
@@ -152,9 +144,22 @@ export class GameRoom {
         break;
       }
 
+      // ── START ─────────────────────────────────────────────────────────────
+      // FIX: handle the 'start' message from the host and broadcast 'gameStart'
+      // to all players so everyone redirects to game.html.
+      case 'start': {
+        if (playerId !== this.hostId) break;
+        this.gamePhase = 'game';
+        this.broadcast({
+          type: 'gameStart',
+          settings: this.settings,
+        });
+        break;
+      }
+
       // ── PLACE DOT ────────────────────────────────────────────────────────
       case 'place_dot': {
-        const { geo, countryId, seedTiles } = msg;   // ← add seedTiles here
+        const { geo, countryId, seedTiles } = msg;
         if (countryId !== undefined) {
           const prev = this.territories[countryId];
           if (!prev) {
@@ -165,17 +170,14 @@ export class GameRoom {
         player.lastSync   = Date.now();
 
         this.broadcast({ type: 'dot_placed', playerId, geo, countryId: countryId ?? null, seedTiles: seedTiles ?? [] });
-        // ↑ forward seedTiles so receiving clients don't need to re-seed from geo
         break;
       }
 
       // ── TROOP SYNC ────────────────────────────────────────────────────────
-      // Clients send this every ~5 seconds so the server can estimate troops
-      // for attack validation without running its own loop.
       case 'troop_sync': {
-        player.lastTroops    = Math.max(0, msg.troops   ?? player.lastTroops);
-        player.lastSync      = Date.now();
-        player.workerRatio   = msg.workerRatio ?? player.workerRatio;
+        player.lastTroops  = Math.max(0, msg.troops   ?? player.lastTroops);
+        player.lastSync    = Date.now();
+        player.workerRatio = msg.workerRatio ?? player.workerRatio;
         break;
       }
 
@@ -183,20 +185,18 @@ export class GameRoom {
       case 'attack': {
         if (this.gamePhase !== 'game') break;
 
-        const territory     = +msg.territory;
+        const territory       = +msg.territory;
         const committedTroops = Math.max(1, Math.floor(msg.troops ?? 0));
 
-        // Already theirs?
         if (this.territories[territory] === playerId) break;
 
-        // Loose anti-cheat: committed troops can't exceed server estimate + buffer
         const estimate = this._estimateTroops(playerId);
         if (committedTroops > estimate * 1.05 + 500) {
           console.warn(`[suspicious] ${player.name}: committed ${committedTroops}, estimated ${Math.floor(estimate)}`);
           break;
         }
 
-        const attackId  = ++this._atkCtr;
+        const attackId   = ++this._atkCtr;
         const defenderId = this.territories[territory] || null;
 
         this.attacks.set(attackId, {
@@ -205,7 +205,6 @@ export class GameRoom {
           defenderId, startedAt: Date.now(),
         });
 
-        // Debit from server record
         player.lastTroops = Math.max(0, (player.lastTroops ?? 0) - committedTroops);
         player.lastSync   = Date.now();
 
@@ -218,15 +217,12 @@ export class GameRoom {
       }
 
       // ── ATTACK RESOLVED ───────────────────────────────────────────────────
-      // Client simulates the combat tick-by-tick and reports when the territory
-      // flips. Server validates a minimum plausible time has elapsed, then
-      // records the capture and broadcasts to all.
       case 'attack_resolved': {
         const atk = this.attacks.get(msg.attackId);
         if (!atk || atk.attackerId !== playerId) break;
 
         const elapsed = Date.now() - atk.startedAt;
-        if (elapsed < 200) break; // reject suspiciously instant captures
+        if (elapsed < 200) break;
 
         const { territory } = atk;
         const prev = this.territories[territory];
@@ -239,7 +235,6 @@ export class GameRoom {
           defenderId: prev || null, attackId: msg.attackId,
         });
 
-        // Win check: 80% of all currently-owned tiles
         this._checkWin(playerId, player.name);
         break;
       }
@@ -249,7 +244,7 @@ export class GameRoom {
         const atk = this.attacks.get(msg.attackId);
         if (!atk || atk.attackerId !== playerId) break;
 
-        const returned = Math.floor(atk.troops * 0.75); // 25% lost
+        const returned = Math.floor(atk.troops * 0.75);
         player.lastTroops = (player.lastTroops ?? 0) + returned;
         player.lastSync   = Date.now();
         this.attacks.delete(msg.attackId);
@@ -259,16 +254,25 @@ export class GameRoom {
         break;
       }
 
+      // ── TILE CLAIM ───────────────────────────────────────────────────────
+      case 'tile_claim': {
+        // Relay tile claims to all other players so their maps stay in sync
+        this.broadcastExcept(playerId, {
+          type: 'tile_claim',
+          from: playerId,
+          tiles: msg.tiles || [],
+        });
+        break;
+      }
+
       // ── ENCLOSURE ────────────────────────────────────────────────────────
-      // Client detects a fully-surrounded territory and reports it.
-      // Server grants it (instant, no troop cost) and broadcasts.
       case 'claim_enclosure': {
         if (this.gamePhase !== 'game') break;
         const granted = [];
 
         for (const rawTid of (msg.territories ?? [])) {
           const tid = +rawTid;
-          if (this.territories[tid] === playerId) continue; // already ours
+          if (this.territories[tid] === playerId) continue;
           this.territories[tid] = playerId;
           granted.push(tid);
         }
@@ -290,7 +294,7 @@ export class GameRoom {
         break;
       }
 
-      // ── WORKER RATIO (no server logic, just stored for estimation) ────────
+      // ── WORKER RATIO ─────────────────────────────────────────────────────
       case 'set_worker_ratio':
         player.workerRatio = Math.min(1, Math.max(0, msg.ratio ?? 0.2));
         break;
@@ -304,15 +308,14 @@ export class GameRoom {
         break;
 
       default:
-        // Relay (chat, emotes, etc.)
         this.broadcastExcept(playerId, { ...msg, from: playerId });
     }
   }
 
   _checkWin(playerId, playerName) {
     if (this.gamePhase !== 'game') return;
-    const total  = Object.keys(this.territories).length;
-    if (total < 10) return; // not enough territory claimed yet to declare a winner
+    const total = Object.keys(this.territories).length;
+    if (total < 10) return;
     const myCount = Object.values(this.territories).filter(o => o === playerId).length;
     if (myCount / total >= 0.80) {
       this.gamePhase = 'ended';
