@@ -384,14 +384,16 @@ let pidxRgb    = {};
 let playerCentroid = {};
 
 // ══════════════════════════════════════════════
-//  SERVER / COUNTRY-LEVEL STATE
+//  SERVER / STATE
 // ══════════════════════════════════════════════
 let ws = null, myId = null, myColor = null, myName = '', roomCode = null, mapKey = 'world';
 
 let players     = {};
-let territories = {};
 let tileCounts  = {};
 let landTileTotal = 0;
+
+// territories map is kept only for server comms (attack messages), NOT for rendering
+let territories = {};
 
 let topoData = null, features = [], featureMap = {}, adjacency = {};
 let cellCountry = null;
@@ -573,15 +575,6 @@ function screenToCell(sx, sy) {
   return gy * GRID_W + gx;
 }
 
-function cellToScreen(idx) {
-  if (!gridProj || !projection) return [0,0];
-  const gx = idx % GRID_W, gy = Math.floor(idx / GRID_W);
-  const geo = gridProj.invert([gx + 0.5, gy + 0.5]);
-  if (!geo) return [0,0];
-  const [sx, sy] = projection(geo);
-  return [sx * transform.k + transform.x, sy * transform.k + transform.y];
-}
-
 function cellNeighbors(idx) {
   const x = idx % GRID_W, y = Math.floor(idx / GRID_W);
   const out = [];
@@ -619,7 +612,6 @@ function getPlayerIdx(pid) {
   return playerIdx[pid];
 }
 
-// FIXED: only cache when we have a real confirmed color; fallback returns without caching
 function getPidxRgb(pidx) {
   if (pidxRgb[pidx]) return pidxRgb[pidx];
   const pid = idxPlayer[pidx];
@@ -639,6 +631,7 @@ function invalidatePidxRgb(pid) {
   if (pidx !== undefined) pidxRgb[pidx] = null;
 }
 
+// ── Core tile claim: only sets gridOwner pixels, never whole countries ──
 function claimTile(idx, pid) {
   const prevPidx = gridOwner[idx];
   const newPidx  = getPlayerIdx(pid);
@@ -836,7 +829,10 @@ function attackTick() {
     if (atkState.tilesConquered % 20 === 0) recomputeCentroid(myId);
 
     const cid = cellToCountry(tileIdx);
-    if (cid) { territories[cid] = myId; players[myId]?.territories.add(cid); send({ type: 'attack', territory: cid, attackRatio }); }
+    if (cid) {
+      territories[cid] = myId;
+      send({ type: 'attack', territory: cid, attackRatio });
+    }
 
     for (const n of cellNeighbors(tileIdx)) {
       if (!gridLand[n] || gridOwner[n] === myPidx || atkState.visited[n]) continue;
@@ -1145,7 +1141,6 @@ function handleClick(cx, cy) {
     const cid = cellToCountry(cellIdx);
     if (cid) {
       territories[cid] = myId;
-      if (players[myId]) players[myId].territories.add(cid);
     }
     send({ type: 'place_dot', geo, countryId: cid || 0, seedTiles: seededTiles });
     toast('Base established!', 'success', 2000);
@@ -1210,10 +1205,7 @@ function endPlacement() {
       myPlaced = true;
       const seededTiles = seedPlayerTiles(startIdx, myId, 5);
       const cid = cellToCountry(startIdx);
-      if (cid) {
-        territories[cid] = myId;
-        if (players[myId]) players[myId].territories.add(cid);
-      }
+      if (cid) territories[cid] = myId;
       send({ type: 'place_dot', geo, countryId: cid || 0, seedTiles: seededTiles });
       toast('Base placed randomly', 'info', 2500);
     }
@@ -1231,8 +1223,7 @@ function endPlacement() {
 // ══════════════════════════════════════════════
 function checkEnclosures() {
   if (!myId || phase !== 'game') return;
-  const myTerr = players[myId]?.territories;
-  if (!myTerr || myTerr.size === 0) return;
+  const myTerr = territories;
   const enclosed = [];
   for (const f of features) {
     const id        = +f.id;
@@ -1282,40 +1273,6 @@ function showPlayerTooltip(id, cx, cy) {
 function hidePlayerTooltip() { ptt.classList.remove('visible'); }
 
 // ══════════════════════════════════════════════
-//  CAPTURE TERRITORY
-// ══════════════════════════════════════════════
-function captureTerritory(id, newOwner, prevOwner) {
-  const prev = prevOwner || territories[id];
-  if (prev && players[prev]) players[prev].territories.delete(+id);
-  territories[id] = newOwner;
-  if (players[newOwner]) players[newOwner].territories.add(+id);
-
-  if (cellCountry) {
-    const newPidx = getPlayerIdx(newOwner);
-    invalidatePidxRgb(newOwner);
-    for (let i = 0; i < GRID_W * GRID_H; i++) {
-      if (cellCountry[i] !== +id) continue;
-      const prevPidx = gridOwner[i];
-      if (prevPidx === newPidx) continue;
-      if (prevPidx) {
-        const prevPid = idxPlayer[prevPidx];
-        if (prevPid) tileCounts[prevPid] = (tileCounts[prevPid] || 1) - 1;
-      }
-      gridOwner[i] = newPidx;
-      tileCounts[newOwner] = (tileCounts[newOwner] || 0) + 1;
-    }
-    if (newOwner !== myId && players[newOwner] && !players[newOwner].dot) {
-      const f = featureMap[+id];
-      if (f) players[newOwner].dot = d3.geoCentroid(f);
-    }
-  }
-
-  recomputeCentroid(newOwner);
-  updateScoreboard();
-  updateSelfCard();
-}
-
-// ══════════════════════════════════════════════
 //  WEBSOCKET
 // ══════════════════════════════════════════════
 function connectWS(code, username) {
@@ -1327,7 +1284,6 @@ function connectWS(code, username) {
   ws.addEventListener('message', e => {
     try {
       const msg = JSON.parse(e.data);
-      // Buffer spatial messages until gridLand is ready
       if (!mapReady && (msg.type === 'dot_placed' || msg.type === 'tile_claim' || msg.type === 'territory_captured')) {
         dbg(`BUFFERED ${msg.type} (mapReady=false)`, 'dbg-err');
         pendingMessages.push(msg);
@@ -1376,7 +1332,6 @@ function handleMsg(msg) {
         }
         getPlayerIdx(p.id);
         invalidatePidxRgb(p.id);
-        dbg(`  player ${p.name} color=${assignedColor}`, 'dbg-inf');
       });
       updateScoreboard(); updateHUD(); break;
 
@@ -1407,8 +1362,8 @@ function handleMsg(msg) {
             if (gridOwner[i] === pidx) gridOwner[i] = 0;
           }
           delete pidxRgb[pidx];
+          tileCounts[msg.id] = 0;
         }
-        players[msg.id].territories.clear();
         delete players[msg.id];
         toast(`${name} left`, 'info');
         updateScoreboard(); updateHUD();
@@ -1442,7 +1397,7 @@ function handleMsg(msg) {
     case 'dot_placed': {
       const isOpp = msg.playerId !== myId;
       const hasSeedTiles = !!(msg.seedTiles && msg.seedTiles.length > 0);
-      dbg(`dot_placed from ${msg.playerId.slice(0,8)} isOpp=${isOpp} seedTiles=${hasSeedTiles ? msg.seedTiles.length : 'NONE'} geo=${msg.geo ? JSON.stringify(msg.geo).slice(0,30) : 'null'}`, hasSeedTiles ? 'dbg-ok' : 'dbg-err');
+      dbg(`dot_placed from ${msg.playerId.slice(0,8)} isOpp=${isOpp} seedTiles=${hasSeedTiles ? msg.seedTiles.length : 'NONE'}`, hasSeedTiles ? 'dbg-ok' : 'dbg-err');
 
       if (players[msg.playerId]) players[msg.playerId].dot = msg.geo;
       if (isOpp) {
@@ -1452,11 +1407,11 @@ function handleMsg(msg) {
             name: 'Commander', color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
             dot: msg.geo, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
           };
-          dbg(`  created placeholder for ${msg.playerId.slice(0,8)} color=${PLAYER_COLORS[Object.keys(players).length-1]}`, 'dbg-inf');
         }
         getPlayerIdx(msg.playerId);
         invalidatePidxRgb(msg.playerId);
 
+        // ── BLOB-ONLY: paint exactly the tiles sent, nothing more ──
         if (hasSeedTiles) {
           let claimed = 0, skipped = 0;
           for (const tileIdx of msg.seedTiles) {
@@ -1467,37 +1422,31 @@ function handleMsg(msg) {
               skipped++;
             }
           }
-          dbg(`  seedTiles: claimed=${claimed} skipped=${skipped} (gridLand=${gridLand ? 'ready' : 'NULL'})`, claimed > 0 ? 'dbg-ok' : 'dbg-err');
+          dbg(`  seedTiles: claimed=${claimed} skipped=${skipped}`, claimed > 0 ? 'dbg-ok' : 'dbg-err');
           recomputeCentroid(msg.playerId);
-          dbg(`  centroid=${JSON.stringify(playerCentroid[msg.playerId])}`, 'dbg-inf');
         } else {
-          // FALLBACK: server didn't forward seedTiles — reconstruct from geo
-          dbg('  NO seedTiles in message — server not forwarding them! Using geo fallback', 'dbg-err');
+          // Fallback: server didn't forward seedTiles — reconstruct blob from geo only
+          dbg('  NO seedTiles — using geo fallback blob seed', 'dbg-err');
           if (msg.geo && gridLand && gridProj) {
             const [gx0, gy0] = gridProj(msg.geo);
             const gx = Math.floor(gx0), gy = Math.floor(gy0);
-            dbg(`  geo fallback gx=${gx} gy=${gy} landAt=${gridLand[gy*GRID_W+gx]}`, 'dbg-inf');
             if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
               const ci = gy * GRID_W + gx;
               if (gridLand[ci]) {
                 const n = seedPlayerTiles(ci, msg.playerId, 5);
                 dbg(`  geo fallback seeded ${n.length} tiles`, 'dbg-ok');
-              } else {
-                dbg('  geo fallback: starting cell is NOT land!', 'dbg-err');
               }
             }
-          } else {
-            dbg(`  geo fallback skipped: geo=${!!msg.geo} gridLand=${!!gridLand} gridProj=${!!gridProj}`, 'dbg-err');
           }
         }
-        if (msg.countryId) {
-          captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
-        }
+        // DO NOT call captureTerritory — we never paint entire countries for opponents
+        if (msg.countryId) territories[msg.countryId] = msg.playerId; // track for server comms only
       }
       break;
     }
 
     case 'tile_claim': {
+      // ── BLOB-ONLY: paint exactly the tiles the opponent claimed ──
       const ownerPid = msg.from;
       if (!ownerPid || ownerPid === myId) break;
       if (!players[ownerPid]) {
@@ -1516,24 +1465,32 @@ function handleMsg(msg) {
           claimed++;
         }
       }
-      recomputeCentroid(ownerPid);
+      if (claimed > 0) recomputeCentroid(ownerPid);
       updateScoreboard();
       checkVictory();
       break;
     }
 
     case 'territory_captured':
-      captureTerritory(msg.territory, msg.attackerId, msg.defenderId);
+      // ── BLOB-ONLY: do NOT repaint country-wide pixels.
+      // Only update territories map for server comms / enclosure logic.
+      territories[msg.territory] = msg.attackerId;
+      if (msg.defenderId && territories[msg.territory] === msg.defenderId) {
+        delete territories[msg.territory];
+      }
+      // If the attacker has no dot yet, set one from the feature centroid for the label
       if (msg.attackerId !== myId && players[msg.attackerId] && !players[msg.attackerId].dot) {
         const f = featureMap[msg.territory];
         if (f) players[msg.attackerId].dot = d3.geoCentroid(f);
       }
+      updateScoreboard();
       checkVictory();
       break;
 
     case 'enclosure_claimed':
+      // Track territory ownership for enclosure logic, but don't repaint country pixels
       (msg.territories || []).forEach(tid => {
-        captureTerritory(tid, msg.playerId, territories[tid]);
+        territories[tid] = msg.playerId;
       });
       if (msg.playerId === myId && msg.territories?.length) {
         toast(`Enclosure! +${msg.territories.length} territories`, 'success', 2500);
@@ -1542,7 +1499,7 @@ function handleMsg(msg) {
       break;
 
     case 'territory_claimed':
-      captureTerritory(msg.territory, msg.playerId, null);
+      territories[msg.territory] = msg.playerId;
       break;
 
     case 'attack_start':
