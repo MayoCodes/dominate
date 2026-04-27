@@ -642,6 +642,7 @@ function seedPlayerTiles(startIdx, pid, radius) {
   const queue   = [startIdx];
   let claimed   = 0;
   const target  = Math.PI * radius * radius | 0;
+  const claimedTiles = [];
   while (queue.length > 0 && claimed < target) {
     const idx = queue.splice(Math.floor(Math.random() * Math.min(queue.length, 4)), 1)[0];
     if (gridLand[idx] && gridOwner[idx] !== pidx) {
@@ -652,6 +653,7 @@ function seedPlayerTiles(startIdx, pid, radius) {
       }
       gridOwner[idx] = pidx;
       tileCounts[pid] = (tileCounts[pid] || 0) + 1;
+      claimedTiles.push(idx);
       claimed++;
     }
     for (const n of cellNeighbors(idx)) {
@@ -662,6 +664,7 @@ function seedPlayerTiles(startIdx, pid, radius) {
     }
   }
   recomputeCentroid(pid);
+  return claimedTiles;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1191,14 +1194,15 @@ function handleClick(cx, cy) {
     players[myId].dot = geo;
     myPlaced = true;
 
-    seedPlayerTiles(cellIdx, myId, 5);
+    const seededTiles = seedPlayerTiles(cellIdx, myId, 5);
 
     const cid = cellToCountry(cellIdx);
     if (cid) {
       territories[cid] = myId;
       if (players[myId]) players[myId].territories.add(cid);
     }
-    send({ type: 'place_dot', geo, countryId: cid || 0 });
+    // Send seeded tile indices so all clients get identical starting territory
+    send({ type: 'place_dot', geo, countryId: cid || 0, seedTiles: seededTiles });
     toast('Base established!', 'success', 2000);
 
   } else if (phase === 'game') {
@@ -1267,13 +1271,13 @@ function endPlacement() {
       const geo = gridProj ? gridProj.invert([gx + 0.5, gy + 0.5]) : [0, 0];
       players[myId].dot = geo;
       myPlaced = true;
-      seedPlayerTiles(startIdx, myId, 3);
+      const seededTiles = seedPlayerTiles(startIdx, myId, 5);
       const cid = cellToCountry(startIdx);
       if (cid) {
         territories[cid] = myId;
         if (players[myId]) players[myId].territories.add(cid);
       }
-      send({ type: 'place_dot', geo, countryId: cid || 0 });
+      send({ type: 'place_dot', geo, countryId: cid || 0, seedTiles: seededTiles });
       toast('Base placed randomly', 'info', 2500);
     }
   }
@@ -1491,20 +1495,38 @@ function handleMsg(msg) {
 
     case 'dot_placed':
       if (players[msg.playerId]) players[msg.playerId].dot = msg.geo;
-      if (msg.countryId !== undefined && msg.playerId !== myId) {
-        if (msg.geo && gridLand && gridProj) {
+      if (msg.playerId !== myId) {
+        // Ensure player entry exists
+        if (!players[msg.playerId]) {
+          const idx = Object.keys(players).length;
+          players[msg.playerId] = {
+            name: 'Commander', color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+            dot: msg.geo, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+          };
+        }
+        getPlayerIdx(msg.playerId);
+        invalidatePidxRgb(msg.playerId);
+
+        if (msg.seedTiles && msg.seedTiles.length > 0) {
+          // Use the exact tiles the sender seeded — guarantees no holes
+          for (const tileIdx of msg.seedTiles) {
+            if (tileIdx >= 0 && tileIdx < gridOwner.length && gridLand[tileIdx]) {
+              claimTile(tileIdx, msg.playerId);
+            }
+          }
+          recomputeCentroid(msg.playerId);
+        } else if (msg.geo && gridLand && gridProj) {
+          // Fallback for old clients: re-seed locally
           const [gx0, gy0] = gridProj(msg.geo);
           const gx = Math.floor(gx0), gy = Math.floor(gy0);
           if (gx >= 0 && gx < GRID_W && gy >= 0 && gy < GRID_H) {
             const ci = gy * GRID_W + gx;
-            // FIX 2: ensure pidx registered + RGB primed BEFORE seeding tiles
-            getPlayerIdx(msg.playerId);
-            invalidatePidxRgb(msg.playerId);
-            if (gridLand[ci]) seedPlayerTiles(ci, msg.playerId, 3);
-            // seedPlayerTiles already calls recomputeCentroid
+            if (gridLand[ci]) seedPlayerTiles(ci, msg.playerId, 5);
           }
         }
-        captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
+        if (msg.countryId) {
+          captureTerritory(msg.countryId, msg.playerId, territories[msg.countryId]);
+        }
       }
       break;
 
