@@ -298,7 +298,6 @@
       <div class="troop-bar" id="troop-bar" style="width:5%"></div>
     </div>
 
-    <!-- Attack progress bar (visible during expansion) -->
     <div class="attack-prog-wrap" id="attack-prog-wrap">
       <div class="attack-prog" id="attack-prog" style="width:0%"></div>
     </div>
@@ -349,26 +348,39 @@ const PLACEMENT_SECS = 20;
 const CIRC           = 2 * Math.PI * 27;
 const WIN_PCT        = 0.80;
 
+// ── FIX 3: High-contrast, visually distinct player colors ──────────────────
+// Each color is maximally distinct in hue, saturation, and lightness from its
+// neighbors so players on adjacent territories are always clearly different.
 const PLAYER_COLORS = [
-  '#7EC8E3','#A8E6CF','#FFD3B6','#FF8B94','#C3B1E1',
-  '#B5EAD7','#FFDAC1','#E2F0CB','#F7C5D5','#9FDBF3',
-  '#D4A5F5','#FAD02E','#F9C784','#B8E0FF','#D5F5E3',
+  '#E63946', // vivid red
+  '#2196F3', // strong blue
+  '#4CAF50', // vivid green
+  '#FF9800', // bright orange
+  '#9C27B0', // rich purple
+  '#00BCD4', // cyan
+  '#FFEB3B', // bright yellow
+  '#F06292', // hot pink
+  '#8BC34A', // lime
+  '#FF5722', // deep orange
+  '#3F51B5', // indigo
+  '#009688', // teal
+  '#CDDC39', // yellow-green
+  '#FF4081', // pink accent
+  '#00E5FF', // light cyan
 ];
 
 // ══════════════════════════════════════════════
-//  PIXEL GRID  — this IS the game world
+//  PIXEL GRID
 // ══════════════════════════════════════════════
 const GRID_W = 1200, GRID_H = 600;
-let gridLand  = null;  // Uint8Array  [GRID_W*GRID_H]  1=land 0=water
-let gridOwner = null;  // Uint32Array [GRID_W*GRID_H]  0=unclaimed, else playerIdx
+let gridLand  = null;
+let gridOwner = null;
 
 let gridProj = null;
-let gridScale = 1;
 
 let playerIdx  = {};
 let idxPlayer  = {};
 let nextIdx    = 1;
-
 let pidxRgb = {};
 
 // ══════════════════════════════════════════════
@@ -378,7 +390,6 @@ let ws = null, myId = null, myColor = null, myName = '', roomCode = null, mapKey
 
 let players = {};
 let territories = {};
-let activeAttacks = new Map();
 let tileCounts    = {};
 let landTileTotal = 0;
 
@@ -388,7 +399,7 @@ let cellCountry = null;
 let phase = 'loading';
 let timerLeft = PLACEMENT_SECS, timerInterval = null, myPlaced = false;
 let transform = { x:0, y:0, k:1 };
-let projection = null, pathGen = null, pathGenMM = null;
+let projection = null, pathGen = null;
 let pulseT = 0;
 let pointers = {}, isDragging = false, dragStart = {x:0,y:0}, pinchStart = null;
 
@@ -448,9 +459,6 @@ function buildProjection() {
   gridProj = d3.geoNaturalEarth1()
     .scale(canvasScale * GRID_W / w)
     .translate([GRID_W / 2, GRID_H / 2.1]);
-
-  const mmProj = d3.geoNaturalEarth1().scale(24).translate([75, 44]);
-  pathGenMM = d3.geoPath(mmProj, mmCtx);
 }
 
 // ══════════════════════════════════════════════
@@ -484,9 +492,7 @@ function rasterizeGrid() {
   const off = document.createElement('canvas');
   off.width = GRID_W; off.height = GRID_H;
   const oc  = off.getContext('2d', { willReadFrequently: true });
-
   const gPath = d3.geoPath(gridProj, oc);
-
   oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
   oc.fillStyle = '#fff';
   features.forEach(f => { oc.beginPath(); gPath(f); oc.fill(); });
@@ -500,16 +506,13 @@ function rasterizeGrid() {
   }
   landTileTotal = 0;
   for (let i = 0; i < gridLand.length; i++) if (gridLand[i]) landTileTotal++;
-  console.log('[GRID] rasterized', GRID_W * GRID_H, 'tiles,', landTileTotal, 'land');
 }
 
 function buildCellCountryMap() {
   const off = document.createElement('canvas');
   off.width = GRID_W; off.height = GRID_H;
   const oc  = off.getContext('2d', { willReadFrequently: true });
-
   const gPath = d3.geoPath(gridProj, oc);
-
   oc.fillStyle = '#000'; oc.fillRect(0, 0, GRID_W, GRID_H);
   features.forEach((f, i) => {
     const n = i + 1;
@@ -638,72 +641,63 @@ function seedPlayerTiles(startIdx, pid, radius) {
   }
 }
 
-function countMyTiles() {
-  if (!myId) return 0;
-  const pidx = playerIdx[myId];
-  if (!pidx) return 0;
-  let n = 0;
-  for (let i = 0; i < gridOwner.length; i++) if (gridOwner[i] === pidx) n++;
-  return n;
-}
-
 // ══════════════════════════════════════════════════════════════
-//  TROOP GROWTH  — local client-side tick (server corrects via state_update)
-//  OpenFrontIO formula: toAdd = (10 + pop^0.73/4) * (1 - pop/maxPop)
-//  Workers grow 30% faster. Troops committed to attacks don't grow.
+//  FIX 2: TROOP GROWTH for ALL players, not just myId
+//  Also drives enemy troop numbers visible in scoreboard
 // ══════════════════════════════════════════════════════════════
-const GROWTH_TICK_MS = 250;  // run growth 4× per second client-side
+const GROWTH_TICK_MS = 250;
 
 function troopGrowthTick() {
-  if (!myId || phase !== 'game') return;
-  const me = players[myId];
-  if (!me) return;
+  if (phase !== 'game') return;
 
-  const pop    = me.troops    || 0;
-  const maxPop = me.maxTroops || 1000;
-  if (pop >= maxPop) return;
+  for (const [pid, p] of Object.entries(players)) {
+    const pop    = p.troops    || 0;
+    const maxPop = p.maxTroops || 1000;
+    if (pop >= maxPop) continue;
 
-  // OpenFrontIO growth formula
-  const base  = 10 + Math.pow(pop, 0.73) / 4;
-  const curve = 1 - pop / maxPop;
-  // Workers boost growth (workerRatio ∈ [0,1], workers = 30% faster)
-  const workerBoost = 1 + workerRatio * 0.3;
-  // Scale down: formula is per-game-tick (60ms), we run at 250ms
-  const toAdd = base * curve * workerBoost * (GROWTH_TICK_MS / 60);
+    const base  = 10 + Math.pow(pop, 0.73) / 4;
+    const curve = 1 - pop / maxPop;
+    const workerBoost = pid === myId ? (1 + workerRatio * 0.3) : 1.05; // enemies grow slightly
+    const toAdd = base * curve * workerBoost * (GROWTH_TICK_MS / 60);
 
-  me.troops = Math.min(maxPop, pop + toAdd);
+    p.troops = Math.min(maxPop, pop + toAdd);
 
-  // Also grow maxTroops locally based on tiles owned
-  // OpenFrontIO: maxPop = basePop + tilesOwned * 0.5 + cities * 25000
-  const myTiles = tileCounts[myId] || 0;
-  me.maxTroops = Math.max(200, 200 + myTiles * 0.5);
+    // Update maxTroops from tiles owned
+    const myTiles = tileCounts[pid] || 0;
+    p.maxTroops = Math.max(200, 200 + myTiles * 0.5);
+  }
 
   updateSelfCard();
+  updateScoreboard(); // refresh enemy troop numbers every tick
 }
 
 // ══════════════════════════════════════════════════════════════
-//  ATTACK EXECUTION  — OpenFrontIO-style expansion engine
+//  FIX 1: BLOB EXPANSION ENGINE
 //
-//  Shape model: the frontier is split into two weighted pools:
-//    • "blob" pool — all border tiles sorted by distance from
-//      the territory's own centroid outward (grows the whole mass)
-//    • "push" pool — tiles sorted toward the target (directed thrust)
-//  Each tick we sample BLOB_RATIO from the blob pool and the rest
-//  from the push pool, giving organic circular growth with a
-//  directed arm reaching toward the click target.
+//  Pure BFS flood-fill from the territory's existing border,
+//  expanding outward like a growing organism. No "push toward
+//  target" arm — the target click only determines which border
+//  tiles we seed first (directional bias at start only).
 //
-//  Troop cost per tile mirrors OpenFrontIO:
-//    cost = ATTRITION * (0.5 + 0.5 * defenderShield)
-//  Speed scales with committed troop count.
+//  Randomness is introduced by:
+//    1. Shuffling the initial border so seed order is random
+//    2. Each tick we pick tiles from the frontier with a small
+//       weighted random draw (nearby tiles chosen slightly more
+//       often than far ones, but never deterministically)
+//    3. Jitter noise on frontier tile selection
+//
+//  This creates organic, blobby territory growth that looks
+//  like ink spreading on paper — roundish but irregular.
 // ══════════════════════════════════════════════════════════════
 
-const ATTRITION_PER_TILE = 0.6;   // base troop cost per tile conquered
-const SPEED_DIVISOR      = 30;    // committed troops / this = tiles per tick
+const ATTRITION_PER_TILE = 0.6;
+const SPEED_DIVISOR      = 30;
 const SPEED_MIN          = 2;
 const SPEED_MAX          = 180;
 const TICK_MS            = 60;
-const BLOB_RATIO         = 0.55;  // fraction of wave that expands the blob (vs pushes toward target)
-const FRONTIER_JITTER    = 8;     // spatial noise so edges look ragged, not circular
+// How many frontier candidates to consider per tile claimed.
+// Higher = more random blob shape; lower = tighter circular growth.
+const BLOB_CANDIDATES    = 6;
 
 let atkState = null;
 
@@ -741,21 +735,6 @@ function canReachTarget(targetIdx) {
   return false;
 }
 
-// Compute approximate centroid of player's territory in grid coords
-function myTerritoryCentroid() {
-  const myPidx = getPlayerIdx(myId);
-  let sx = 0, sy = 0, n = 0;
-  // Sample every 8th tile for speed
-  for (let i = 0; i < gridOwner.length; i += 8) {
-    if (gridOwner[i] === myPidx) {
-      sx += i % GRID_W;
-      sy += Math.floor(i / GRID_W);
-      n++;
-    }
-  }
-  return n > 0 ? [sx / n, sy / n] : [GRID_W / 2, GRID_H / 2];
-}
-
 function startAttack(targetIdx) {
   cancelAttack();
 
@@ -783,101 +762,80 @@ function startAttack(targetIdx) {
 
   const tx = targetIdx % GRID_W;
   const ty = Math.floor(targetIdx / GRID_W);
-  const [cx, cy] = myTerritoryCentroid();
 
-  // ── Build frontier ─────────────────────────────────────────────
+  // ── Build initial frontier ─────────────────────────────────
+  // Collect all border tiles (owned tiles with unowned land neighbors)
   const size    = GRID_W * GRID_H;
   const visited = new Uint8Array(size);
-  const blobFrontier = [];  // sorted outward from centroid (grows the blob)
-  const pushFrontier = [];  // sorted toward target (directed arm)
+  const frontier = []; // array of {idx, dist} sorted toward target first for seeding
 
   for (let i = 0; i < size; i++) {
     if (gridOwner[i] !== myPidx) continue;
     for (const n of cellNeighbors(i)) {
       if (gridLand[n] && gridOwner[n] !== myPidx && !visited[n]) {
         visited[n] = 1;
-        blobFrontier.push(n);
-        pushFrontier.push(n);
+        const nx = n % GRID_W, ny = Math.floor(n / GRID_W);
+        // Distance to target — used only to bias initial seed order so the
+        // blob starts growing toward where the player clicked, but then
+        // organically expands outward from there.
+        const dist = Math.hypot(nx - tx, ny - ty);
+        frontier.push({ idx: n, dist });
       }
     }
   }
 
-  // Blob frontier: sorted furthest from centroid first → expands outward as a whole
-  blobFrontier.sort((a, b) => {
-    const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-    const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-    // Furthest from centroid first, with per-tile noise for ragged edges
-    const da = -Math.hypot(ax - cx, ay - cy) + (Math.random() - 0.5) * FRONTIER_JITTER * 2;
-    const db = -Math.hypot(bx - cx, by - cy) + (Math.random() - 0.5) * FRONTIER_JITTER * 2;
-    return da - db;
-  });
-
-  // Push frontier: sorted closest to target first → directed arm
-  pushFrontier.sort((a, b) => {
-    const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-    const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-    const da = Math.hypot(ax - tx, ay - ty) + (Math.random() - 0.5) * FRONTIER_JITTER;
-    const db = Math.hypot(bx - tx, by - ty) + (Math.random() - 0.5) * FRONTIER_JITTER;
-    return da - db;
-  });
+  // Sort: closest to target first, with noise so it's not a perfect arm
+  frontier.sort((a, b) => (a.dist - b.dist) + (Math.random() - 0.5) * 20);
 
   atkState = {
     targetIdx, targetX: tx, targetY: ty,
-    centX: cx, centY: cy,
     committedTroops: committed, spentTroops: 0,
-    blobFrontier, pushFrontier,
+    // frontier is a simple array; we use a flat Uint8Array for O(1) membership
+    frontier: frontier.map(f => f.idx),
     visited,
     tilesConquered: 0,
   };
 
   document.getElementById('attack-prog-wrap').style.display = 'block';
-  document.getElementById('attack-btn').textContent = '⚔ Attacking — click to cancel';
+  document.getElementById('attack-btn').textContent = '⚔ Expanding — click to cancel';
   document.getElementById('attack-btn').classList.add('active');
 
   atkState.interval = setInterval(attackTick, TICK_MS);
   attackTick();
 }
 
+// ── BLOB TICK ─────────────────────────────────────────────────
+// Each tick:
+//   1. Determine speed (tiles to claim this tick)
+//   2. For each tile to claim: pick a random candidate from the
+//      first BLOB_CANDIDATES entries in the frontier. This keeps
+//      the shape locally clumped (never jumps far away) while
+//      the jitter stops it being a perfect circle.
+//   3. Claimed tile's unvisited neighbors are appended to frontier
+// ─────────────────────────────────────────────────────────────
 function attackTick() {
   if (!atkState) return;
   const myPidx = getPlayerIdx(myId);
-  const { targetX, targetY, centX, centY } = atkState;
 
-  // Speed scales with remaining committed troops
   const remaining = atkState.committedTroops - atkState.spentTroops;
   const speed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.floor(remaining / SPEED_DIVISOR)));
 
-  // Split wave between blob growth and directed push
-  const blobCount = Math.ceil(speed * BLOB_RATIO);
-  const pushCount = speed - blobCount;
-
-  const wave = [];
-  const seenThisWave = new Set();
-
-  // Pull from blob frontier (outward growth)
-  for (let i = 0; i < blobCount && atkState.blobFrontier.length > 0; ) {
-    const t = atkState.blobFrontier.shift();
-    if (!seenThisWave.has(t) && gridOwner[t] !== myPidx) {
-      wave.push(t); seenThisWave.add(t); i++;
-    }
-  }
-  // Pull from push frontier (directed arm toward target)
-  for (let i = 0; i < pushCount && atkState.pushFrontier.length > 0; ) {
-    const t = atkState.pushFrontier.shift();
-    if (!seenThisWave.has(t) && gridOwner[t] !== myPidx) {
-      wave.push(t); seenThisWave.add(t); i++;
-    }
-  }
-
   const claimedThisWave = [];
-  const newBlobTiles = [];
-  const newPushTiles = [];
 
-  for (const tileIdx of wave) {
-    if (!atkState) break;
+  for (let s = 0; s < speed; s++) {
+    if (!atkState || atkState.frontier.length === 0) break;
+
+    // Pick a random tile from a small window at the front of the frontier
+    // Window size = BLOB_CANDIDATES, clamped to actual frontier length
+    const window = Math.min(BLOB_CANDIDATES, atkState.frontier.length);
+    const pick   = Math.floor(Math.random() * window);
+    const tileIdx = atkState.frontier.splice(pick, 1)[0];
+
+    // Skip if another tick already claimed it
     if (gridOwner[tileIdx] === myPidx) continue;
+    if (!gridLand[tileIdx]) continue;
 
-    // ── Troop cost per tile ───────────────────────────────────
+    // ── Troop cost ──────────────────────────────────────────
     let troopCost = ATTRITION_PER_TILE;
     const defPidx = gridOwner[tileIdx];
     if (defPidx) {
@@ -891,19 +849,6 @@ function attackTick() {
     }
 
     atkState.spentTroops += troopCost;
-    if (atkState.spentTroops >= atkState.committedTroops) {
-      // Claim this tile then stop
-      claimTile(tileIdx, myId);
-      claimedThisWave.push(tileIdx);
-      atkState.tilesConquered++;
-      const cid = cellToCountry(tileIdx);
-      if (cid) { territories[cid] = myId; players[myId]?.territories.add(cid); send({ type: 'attack', territory: cid, attackRatio }); }
-      if (claimedThisWave.length) send({ type: 'tile_claim', tiles: claimedThisWave });
-      cancelAttack();
-      toast('Troops exhausted — attack more to continue', 'info', 2500);
-      return;
-    }
-
     claimTile(tileIdx, myId);
     claimedThisWave.push(tileIdx);
     atkState.tilesConquered++;
@@ -911,48 +856,22 @@ function attackTick() {
     const cid = cellToCountry(tileIdx);
     if (cid) { territories[cid] = myId; players[myId]?.territories.add(cid); send({ type: 'attack', territory: cid, attackRatio }); }
 
-    // Add neighbors to both frontiers
+    // Add unvisited land neighbors to back of frontier
     for (const n of cellNeighbors(tileIdx)) {
       if (!gridLand[n] || gridOwner[n] === myPidx || atkState.visited[n]) continue;
       atkState.visited[n] = 1;
-      newBlobTiles.push(n);
-      newPushTiles.push(n);
+      atkState.frontier.push(n);
+    }
+
+    if (atkState.spentTroops >= atkState.committedTroops) {
+      if (claimedThisWave.length) send({ type: 'tile_claim', tiles: claimedThisWave });
+      cancelAttack();
+      toast('Troops exhausted — attack more to continue', 'info', 2500);
+      return;
     }
   }
 
   if (claimedThisWave.length > 0) send({ type: 'tile_claim', tiles: claimedThisWave });
-
-  // ── Re-insert new tiles into each frontier ────────────────────
-  // Blob: interleave new tiles sorted by distance-from-centroid with existing
-  if (newBlobTiles.length > 0) {
-    newBlobTiles.sort((a, b) => {
-      const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-      const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-      return (-Math.hypot(ax - centX, ay - centY) + (Math.random()-0.5)*FRONTIER_JITTER*2)
-           - (-Math.hypot(bx - centX, by - centY) + (Math.random()-0.5)*FRONTIER_JITTER*2);
-    });
-    // Insert at front (these are the freshest border tiles, farthest from centre)
-    atkState.blobFrontier.unshift(...newBlobTiles);
-    // Re-sort periodically so the blob shape stays correct even as territory shape shifts
-    if (atkState.blobFrontier.length > 400) {
-      atkState.blobFrontier.sort((a, b) => {
-        const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-        const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-        return -Math.hypot(ax - centX, ay - centY) + Math.hypot(bx - centX, by - centY);
-      });
-    }
-  }
-
-  // Push: insert new tiles sorted toward target at the front
-  if (newPushTiles.length > 0) {
-    newPushTiles.sort((a, b) => {
-      const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-      const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-      return (Math.hypot(ax-targetX,ay-targetY)+(Math.random()-0.5)*FRONTIER_JITTER)
-           - (Math.hypot(bx-targetX,by-targetY)+(Math.random()-0.5)*FRONTIER_JITTER);
-    });
-    atkState.pushFrontier.unshift(...newPushTiles);
-  }
 
   const spentPct = Math.min(100, (atkState.spentTroops / atkState.committedTroops) * 100);
   document.getElementById('attack-prog').style.width = spentPct + '%';
@@ -966,8 +885,10 @@ function attackTick() {
     toast(`Target reached! +${n} tiles`, 'success', 2500);
     return;
   }
-  if (!atkState || (atkState.blobFrontier.length === 0 && atkState.pushFrontier.length === 0)) {
+  if (!atkState || atkState.frontier.length === 0) {
+    const n = atkState ? atkState.tilesConquered : 0;
     cancelAttack();
+    if (n > 0) toast(`Expansion complete! +${n} tiles`, 'success', 2000);
     return;
   }
 }
@@ -1105,7 +1026,6 @@ function redraw() {
     ctx.strokeStyle = `rgba(201,76,76,${0.5 + 0.5 * pulse2})`;
     ctx.lineWidth = 2;
     const rs = 10 + pulse2 * 4;
-    // Crosshair reticle
     ctx.beginPath();
     ctx.arc(sx2, sy2, rs, 0, Math.PI * 2);
     ctx.stroke();
@@ -1274,32 +1194,13 @@ function handleClick(cx, cy) {
     if (cellIdx < 0) return;
     const myPidx = getPlayerIdx(myId);
 
-    // Clicking own tile cancels current attack
     if (gridOwner[cellIdx] === myPidx) {
       cancelAttack();
       return;
     }
 
-    // Start new attack (cancels any existing one)
     startAttack(cellIdx);
   }
-}
-
-function screenToGeo(cx, cy) {
-  return projection.invert([(cx - transform.x) / transform.k, (cy - transform.y) / transform.k]);
-}
-
-function featureAt(cx, cy) {
-  for (const f of features) {
-    ctx.save();
-    ctx.translate(transform.x, transform.y);
-    ctx.scale(transform.k, transform.k);
-    ctx.beginPath(); pathGen(f);
-    const hit = ctx.isPointInPath(cx, cy);
-    ctx.restore();
-    if (hit) return f;
-  }
-  return null;
 }
 
 // ══════════════════════════════════════════════
@@ -1542,7 +1443,13 @@ function handleMsg(msg) {
     case 'state_update':
       msg.players.forEach(p => {
         if (!players[p.id]) return;
-        players[p.id].troops    = p.troops;
+        // Server is authoritative — sync troops if server says significantly different
+        const local = players[p.id].troops || 0;
+        const server = p.troops || 0;
+        // Only hard-sync if difference is large (avoids jumpy display from latency)
+        if (Math.abs(local - server) > local * 0.15) {
+          players[p.id].troops = server;
+        }
         players[p.id].maxTroops = p.maxTroops;
         players[p.id].gold      = p.gold;
       });
