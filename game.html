@@ -1002,16 +1002,16 @@ function redraw() {
   ctx.restore(); // ← end the transformed block early
 
   // ── Draw player labels + dots using tile centroid (always centred on territory) ─
+  // drawGrid maps the offscreen grid (GRID_W × GRID_H) onto the canvas with:
+  //   dest x = transform.x + (gx / GRID_W) * canvas.width  * transform.k
+  //   dest y = transform.y + (gy / GRID_H) * canvas.height * transform.k
+  // Use that same formula for the dot so it always sits on the blob, no geo round-trip.
   Object.entries(players).forEach(([id, p]) => {
     const cent = playerCentroid[id];
     if (!cent) return;
 
-    // Convert grid centroid → screen space
-    const geo = gridProj.invert([cent[0], cent[1]]);
-    if (!geo) return;
-    const [px0, py0] = projection(geo);
-    const px = px0 * transform.k + transform.x;
-    const py = py0 * transform.k + transform.y;
+    const px = transform.x + (cent[0] / GRID_W) * canvas.width  * transform.k;
+    const py = transform.y + (cent[1] / GRID_H) * canvas.height * transform.k;
 
     const isMe  = id === myId;
     const pulse = Math.sin(pulseT / (isMe ? 280 : 450) + (parseInt(id, 16) || 0) * 0.1) * 1.5;
@@ -1464,15 +1464,25 @@ function handleMsg(msg) {
       break;
 
     case 'state_update':
-      msg.players.forEach(p => {
-        if (!players[p.id]) return;
-        const local = players[p.id].troops || 0;
-        const server = p.troops || 0;
-        if (Math.abs(local - server) > local * 0.15) {
-          players[p.id].troops = server;
+      msg.players.forEach((p, i) => {
+        if (!players[p.id]) {
+          // Create placeholder so tiles already claimed show correctly
+          players[p.id] = {
+            name: p.name || 'Commander',
+            color: PLAYER_COLORS[i % PLAYER_COLORS.length],
+            dot: null, territories: new Set(), troops: p.troops || 50, maxTroops: p.maxTroops || 1000, gold: p.gold || 0,
+          };
+          getPlayerIdx(p.id);
+          invalidatePidxRgb(p.id);
+        } else {
+          // Update name in case it was a placeholder
+          if (p.name) players[p.id].name = p.name;
+          const local = players[p.id].troops || 0;
+          const server = p.troops || 0;
+          if (Math.abs(local - server) > local * 0.15) players[p.id].troops = server;
+          players[p.id].maxTroops = p.maxTroops;
+          players[p.id].gold      = p.gold;
         }
-        players[p.id].maxTroops = p.maxTroops;
-        players[p.id].gold      = p.gold;
       });
       document.getElementById('hud-turn').textContent = msg.tick;
       updateSelfCard();
@@ -1501,8 +1511,14 @@ function handleMsg(msg) {
     case 'tile_claim': {
       const ownerPid = msg.from;
       if (!ownerPid || ownerPid === myId) break;
-      if (!players[ownerPid]) break;
-      // FIX 2: ensure pidx + RGB primed before any tile gets painted
+      // Auto-create a placeholder if we haven't received playerList/playerJoined yet
+      if (!players[ownerPid]) {
+        const idx = Object.keys(players).length;
+        players[ownerPid] = {
+          name: 'Commander', color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+          dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+        };
+      }
       getPlayerIdx(ownerPid);
       invalidatePidxRgb(ownerPid);
       for (const tileIdx of (msg.tiles || [])) {
