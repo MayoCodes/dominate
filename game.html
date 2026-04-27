@@ -134,6 +134,10 @@
     padding: 7px 14px; border: 1px solid rgba(201,76,76,0.3); color: var(--text-muted);
     background: rgba(0,0,0,0.4); cursor: default; width: 100%;
   }
+  #attack-btn.active {
+    border-color: rgba(201,76,76,0.7); color: var(--red);
+    background: rgba(201,76,76,0.08);
+  }
 
   /* TROOP BAR */
   .troop-bar-wrap { width: 100%; height: 3px; background: rgba(201,168,76,0.1); border-radius: 2px; overflow: hidden; }
@@ -141,6 +145,10 @@
   .troop-bar.near-max { background: var(--green); }
   .troop-bar.optimal { background: var(--gold); }
   .troop-bar.low { background: var(--red); }
+
+  /* ATTACK PROGRESS */
+  .attack-prog-wrap { width: 100%; height: 2px; background: rgba(201,76,76,0.1); border-radius: 2px; overflow: hidden; display: none; }
+  .attack-prog { height: 100%; background: var(--red); border-radius: 2px; transition: width 0.15s; }
 
   /* SCOREBOARD */
   #scoreboard {
@@ -290,6 +298,11 @@
       <div class="troop-bar" id="troop-bar" style="width:5%"></div>
     </div>
 
+    <!-- Attack progress bar (visible during expansion) -->
+    <div class="attack-prog-wrap" id="attack-prog-wrap">
+      <div class="attack-prog" id="attack-prog" style="width:0%"></div>
+    </div>
+
     <div class="slider-row">
       <div class="slider-label">Workers <span id="worker-pct">20%</span></div>
       <input type="range" id="worker-slider" min="0" max="100" value="20"
@@ -302,7 +315,7 @@
         oninput="onAttackSlider(this.value)">
     </div>
 
-    <button id="attack-btn">Click territory to expand</button>
+    <button id="attack-btn" onclick="cancelAttack()">Click territory to expand</button>
   </div>
 
   <div id="scoreboard">
@@ -634,59 +647,104 @@ function countMyTiles() {
   return n;
 }
 
-// ══════════════════════════════════════════════
-//  FLOOD EXPANSION  (OpenFront-style)
-// ══════════════════════════════════════════════
-let floodActive   = false;
-let floodFrontier = [];
-let floodInterval = null;
+// ══════════════════════════════════════════════════════════════
+//  ATTACK EXECUTION  — OpenFrontIO-style expansion engine
+//
+//  Key design principles mirroring OpenFrontIO:
+//  1. Troops are COMMITTED up front (attackRatio × current troops)
+//  2. Each tile costs troop_loss based on defender shield / tile density
+//  3. Speed (tiles/tick) scales with committed troop count
+//  4. Frontier is a priority queue sorted by dist-to-target + jitter
+//  5. Attack stops when committed troops are exhausted OR target reached
+//  6. BFS path-check before committing (no attacking across ocean)
+// ══════════════════════════════════════════════════════════════
 
-function cancelFlood() {
-  floodActive   = false;
-  floodFrontier = [];
-  floodTarget   = -1;
-  floodVisited  = null;
-  if (floodInterval) { clearInterval(floodInterval); floodInterval = null; }
+const TERRAIN_LOSS = {
+  // Each tile conquered costs this many committed troops
+  BASE_LAND:      0.4,   // open land / wilderness
+  ENEMY_LAND:     1.0,   // enemy-owned tile (defender shield effect)
+};
+
+// How many committed troops are needed to conquer one enemy tile.
+// Mirrors: defenderLoss = defenderTroops / defenderTilesOwned
+// Attacker loses: 0.8 * terrainDef * clampedTroopRatio
+const ATTRITION_PER_TILE = 0.8;  // base multiplier on committed troop spend
+
+// Tiles processed per tick — scales with committed troop mass
+// speed = max(1, committedTroops / SPEED_DIVISOR)
+// mirrors OpenFrontIO's "speed" = terrainSpeed * largeBuff
+const SPEED_DIVISOR = 40;
+const SPEED_MIN     = 1;
+const SPEED_MAX     = 120;
+
+// Tick interval in ms — matches OpenFrontIO's ~60ms game tick
+const TICK_MS = 60;
+
+// Frontier jitter so expansion looks organic, not perfectly circular
+const FRONTIER_JITTER = 6;
+
+let atkState = null;  // null = no attack running
+
+/*
+  atkState = {
+    targetIdx:      int,        // destination cell
+    targetX/Y:      int,        // grid coords of target for distance sort
+    committedTroops: float,     // troops locked into this attack
+    spentTroops:    float,      // troops consumed so far
+    frontier:       Int32Array, // sorted candidate tiles
+    frontierLen:    int,
+    visited:        Uint8Array,
+    interval:       id,
+    tilesConquered: int,
+    startTiles:     int,        // total tiles at attack start (for progress bar)
+  }
+*/
+
+function cancelAttack() {
+  if (!atkState) return;
+  clearInterval(atkState.interval);
+  atkState = null;
+  document.getElementById('attack-prog-wrap').style.display = 'none';
+  document.getElementById('attack-btn').textContent = 'Click territory to expand';
+  document.getElementById('attack-btn').classList.remove('active');
 }
 
-function bfsPathToTarget(targetIdx) {
+// Quick BFS reachability check (same as before, needed before committing troops)
+function canReachTarget(targetIdx) {
   const myPidx = playerIdx[myId];
-  if (!myPidx || !gridLand[targetIdx]) return null;
-  if (gridOwner[targetIdx] === myPidx) return null;
-
+  if (!myPidx) return false;
   const size   = GRID_W * GRID_H;
-  const parent = new Int32Array(size).fill(-2);
-  const queue  = [targetIdx];
-  parent[targetIdx] = -1;
-  let head = 0;
+  const visited = new Uint8Array(size);
+  const queue  = [];
 
-  while (head < queue.length) {
-    const cur = queue[head++];
-    for (const n of cellNeighbors(cur)) {
-      if (parent[n] !== -2) continue;
-      if (!gridLand[n]) continue;
-      parent[n] = cur;
-      if (gridOwner[n] === myPidx) {
-        const path = [];
-        let c = targetIdx;
-        while (c !== n) {
-          path.unshift(c);
-          c = parent[c];
-          if (c < 0) break;
-        }
-        return path;
+  // Seed queue with all my border tiles adjacent to non-mine land
+  for (let i = 0; i < size; i++) {
+    if (gridOwner[i] !== myPidx) continue;
+    for (const n of cellNeighbors(i)) {
+      if (gridLand[n] && gridOwner[n] !== myPidx && !visited[n]) {
+        visited[n] = 1;
+        queue.push(n);
       }
-      queue.push(n);
     }
   }
-  return null;
+
+  let head = 0;
+  while (head < queue.length) {
+    const cur = queue[head++];
+    if (cur === targetIdx) return true;
+    for (const n of cellNeighbors(cur)) {
+      if (!visited[n] && gridLand[n]) {
+        visited[n] = 1;
+        queue.push(n);
+      }
+    }
+  }
+  return false;
 }
 
-let floodTarget  = -1;
-let floodVisited = null;
+function startAttack(targetIdx) {
+  cancelAttack();
 
-function startFloodToCell(targetIdx) {
-  cancelFlood();
   if (!gridLand[targetIdx]) {
     toast('Cannot expand into ocean', 'error', 1800);
     return;
@@ -694,56 +752,128 @@ function startFloodToCell(targetIdx) {
   const myPidx = getPlayerIdx(myId);
   if (gridOwner[targetIdx] === myPidx) return;
 
-  const testPath = bfsPathToTarget(targetIdx);
-  if (!testPath) {
+  // ── Reachability check ───────────────────────────────────────
+  if (!canReachTarget(targetIdx)) {
     toast('Unreachable — separated by water', 'error', 1800);
     return;
   }
 
-  floodTarget  = targetIdx;
-  floodActive  = true;
-  floodVisited = new Uint8Array(GRID_W * GRID_H);
+  // ── Commit troops (OpenFrontIO: player sets attackRatio) ─────
+  const me = players[myId];
+  if (!me || me.troops <= 0) {
+    toast('Not enough troops', 'error', 1800);
+    return;
+  }
 
-  const tx = targetIdx % GRID_W, ty = Math.floor(targetIdx / GRID_W);
+  const committed = Math.max(1, Math.floor(me.troops * attackRatio));
+  // Deduct immediately — troops are "in the field"
+  me.troops -= committed;
+  updateSelfCard();
 
-  const myPidxL  = myPidx;
-  const frontier = [];
-  for (let i = 0; i < gridOwner.length; i++) {
-    if (gridOwner[i] !== myPidxL) continue;
+  const tx = targetIdx % GRID_W;
+  const ty = Math.floor(targetIdx / GRID_W);
+
+  // ── Build initial frontier from all border tiles ─────────────
+  const size    = GRID_W * GRID_H;
+  const visited = new Uint8Array(size);
+  const initialFrontier = [];
+
+  for (let i = 0; i < size; i++) {
+    if (gridOwner[i] !== myPidx) continue;
     for (const n of cellNeighbors(i)) {
-      if (gridLand[n] && gridOwner[n] !== myPidxL && !floodVisited[n]) {
-        floodVisited[n] = 1;
-        frontier.push(n);
+      if (gridLand[n] && gridOwner[n] !== myPidx && !visited[n]) {
+        visited[n] = 1;
+        initialFrontier.push(n);
       }
     }
   }
-  frontier.sort((a, b) => {
+
+  // Sort toward target with jitter (OpenFrontIO does this to look organic)
+  initialFrontier.sort((a, b) => {
     const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
     const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-    return (Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty)) + (Math.random()-0.5)*4;
+    const da = Math.hypot(ax - tx, ay - ty) + (Math.random() - 0.5) * FRONTIER_JITTER;
+    const db = Math.hypot(bx - tx, by - ty) + (Math.random() - 0.5) * FRONTIER_JITTER;
+    return da - db;
   });
-  floodFrontier = frontier;
 
-  floodInterval = setInterval(floodTick, 55);
-  floodTick();
+  atkState = {
+    targetIdx,
+    targetX: tx,
+    targetY: ty,
+    committedTroops: committed,
+    spentTroops: 0,
+    frontier: initialFrontier,
+    visited,
+    tilesConquered: 0,
+    startTiles: tileCounts[myId] || 0,
+  };
+
+  document.getElementById('attack-prog-wrap').style.display = 'block';
+  document.getElementById('attack-btn').textContent = '⚔ Attacking — click to cancel';
+  document.getElementById('attack-btn').classList.add('active');
+
+  atkState.interval = setInterval(attackTick, TICK_MS);
+  attackTick();
 }
 
-function floodTick() {
-  if (!floodActive || floodFrontier.length === 0) { cancelFlood(); return; }
+function attackTick() {
+  if (!atkState) return;
   const myPidx = getPlayerIdx(myId);
-  const tx = floodTarget % GRID_W, ty = Math.floor(floodTarget / GRID_W);
+  const me = players[myId];
+  const { targetX, targetY } = atkState;
 
-  const waveSize = Math.max(15, Math.floor(floodFrontier.length * 0.08));
-  const wave     = floodFrontier.splice(0, waveSize);
+  // ── Speed: tiles per tick scales with remaining committed troops ──
+  // More troops committed → faster expansion (like larger player = faster in OpenFrontIO)
+  const remainingRatio = 1 - atkState.spentTroops / atkState.committedTroops;
+  const speed = Math.min(SPEED_MAX, Math.max(SPEED_MIN,
+    Math.floor((atkState.committedTroops - atkState.spentTroops) / SPEED_DIVISOR)
+  ));
+
+  const wave = atkState.frontier.splice(0, speed);
   const nextTiles = [];
-
-  // Collect tiles claimed this wave so we can broadcast them
   const claimedThisWave = [];
 
   for (const tileIdx of wave) {
+    if (!atkState) break;  // cancelled mid-tick
+
+    // Already ours (race condition — skip)
     if (gridOwner[tileIdx] === myPidx) continue;
+
+    // ── Troop cost per tile (mirrors OpenFrontIO attacker loss formula) ──
+    // cost = ATTRITION_PER_TILE * (0.5 + 0.5 * defenderDensity)
+    // defenderDensity = clamp(defenderTroops / defenderTiles, 0, 2)
+    let troopCost = ATTRITION_PER_TILE;
+    const defPidx = gridOwner[tileIdx];
+    if (defPidx) {
+      const defPid = idxPlayer[defPidx];
+      const defPlayer = defPid ? players[defPid] : null;
+      const defTiles  = (defPid ? tileCounts[defPid] : 0) || 1;
+      const defTroops = defPlayer ? (defPlayer.troops || 0) : 0;
+      // Shield value: defender troop density per tile (clamped 0–2)
+      const defShield = Math.min(2, defTroops / defTiles);
+      // Attacker cost: base × (0.5 + 0.5 × shield) — matches OpenFrontIO formula shape
+      troopCost = ATTRITION_PER_TILE * (0.5 + 0.5 * defShield);
+      // Defender also loses troops proportional to their density
+      if (defPlayer) {
+        defPlayer.troops = Math.max(0, defPlayer.troops - defTiles > 0 ? defPlayer.troops / defTiles : 0);
+      }
+    }
+
+    // Spend troops
+    atkState.spentTroops += troopCost;
+
+    // Out of committed troops → stop (OpenFrontIO: attack stalls when you run out)
+    if (atkState.spentTroops >= atkState.committedTroops) {
+      cancelAttack();
+      toast('Troops exhausted — expand more to continue', 'info', 2500);
+      return;
+    }
+
+    // Claim the tile
     claimTile(tileIdx, myId);
     claimedThisWave.push(tileIdx);
+    atkState.tilesConquered++;
 
     const cid = cellToCountry(tileIdx);
     if (cid) {
@@ -752,45 +882,56 @@ function floodTick() {
       send({ type: 'attack', territory: cid, attackRatio });
     }
 
+    // Expand frontier from newly claimed tile
     for (const n of cellNeighbors(tileIdx)) {
-      if (gridLand[n] && gridOwner[n] !== myPidx && !floodVisited[n]) {
-        floodVisited[n] = 1;
+      if (gridLand[n] && gridOwner[n] !== myPidx && !atkState.visited[n]) {
+        atkState.visited[n] = 1;
         nextTiles.push(n);
       }
     }
   }
 
-  // Broadcast pixel-level tile claims so opponents see expansion in real time.
-  // The server's default relay case forwards this as { ...msg, from: myId }
-  // which lets the recipient know which player to attribute the tiles to.
+  // Broadcast pixel claims to other players
   if (claimedThisWave.length > 0) {
     send({ type: 'tile_claim', tiles: claimedThisWave });
   }
 
+  // ── Insert new frontier tiles, sorted toward target ───────────
+  // Only re-sort the additions so we don't re-sort the whole array every tick.
+  // If frontier is small enough, do a full sort for accuracy.
   if (nextTiles.length > 0) {
-    nextTiles.sort((a, b) => {
-      const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
-      const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-      return (Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty)) + (Math.random()-0.5)*4;
-    });
-    for (const n of nextTiles) {
-      floodFrontier.push(n);
-    }
-    if (floodFrontier.length < 1500) {
-      floodFrontier.sort((a, b) => {
+    for (const n of nextTiles) atkState.frontier.push(n);
+    if (atkState.frontier.length < 2000) {
+      atkState.frontier.sort((a, b) => {
         const ax = a % GRID_W, ay = Math.floor(a / GRID_W);
         const bx = b % GRID_W, by = Math.floor(b / GRID_W);
-        return Math.hypot(ax-tx,ay-ty) - Math.hypot(bx-tx,by-ty);
+        const da = Math.hypot(ax - targetX, ay - targetY) + (Math.random() - 0.5) * FRONTIER_JITTER;
+        const db = Math.hypot(bx - targetX, by - targetY) + (Math.random() - 0.5) * FRONTIER_JITTER;
+        return da - db;
       });
     }
   }
 
+  // ── Update attack progress bar ────────────────────────────────
+  const spentPct = Math.min(100, (atkState.spentTroops / atkState.committedTroops) * 100);
+  document.getElementById('attack-prog').style.width = spentPct + '%';
+
   updateSelfCard();
-  if (floodTarget >= 0 && gridOwner[floodTarget] === myPidx) { cancelFlood(); return; }
-  if (floodFrontier.length === 0) { cancelFlood(); return; }
+  checkVictory();
+
+  // ── Victory condition: target tile reached ────────────────────
+  if (atkState && gridOwner[atkState.targetIdx] === myPidx) {
+    cancelAttack();
+    toast(`Target reached! +${atkState ? atkState.tilesConquered : ''} tiles`, 'success', 2500);
+    return;
+  }
+
+  // ── No more frontier tiles → attack ended ────────────────────
+  if (!atkState || atkState.frontier.length === 0) {
+    cancelAttack();
+    return;
+  }
 }
-
-
 
 // ══════════════════════════════════════════════
 //  DRAW LOOP
@@ -916,6 +1057,26 @@ function redraw() {
       ctx.fillText(fmtNum(p.troops || 0), px, py - r - 4 / transform.k);
     }
   });
+
+  // Draw target reticle when attack is active
+  if (atkState) {
+    const [sx2, sy2] = cellToScreen(atkState.targetIdx);
+    const pulse2 = 0.5 + 0.5 * Math.sin(pulseT / 200);
+    ctx.save();
+    ctx.strokeStyle = `rgba(201,76,76,${0.5 + 0.5 * pulse2})`;
+    ctx.lineWidth = 2;
+    const rs = 10 + pulse2 * 4;
+    // Crosshair reticle
+    ctx.beginPath();
+    ctx.arc(sx2, sy2, rs, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx2 - rs - 4, sy2); ctx.lineTo(sx2 + rs + 4, sy2);
+    ctx.moveTo(sx2, sy2 - rs - 4); ctx.lineTo(sx2, sy2 + rs + 4);
+    ctx.strokeStyle = `rgba(201,76,76,${0.3 + 0.4 * pulse2})`;
+    ctx.stroke();
+    ctx.restore();
+  }
 
   ctx.restore();
   drawMinimap();
@@ -1074,9 +1235,14 @@ function handleClick(cx, cy) {
     if (cellIdx < 0) return;
     const myPidx = getPlayerIdx(myId);
 
-    if (gridOwner[cellIdx] === myPidx) { cancelFlood(); return; }
+    // Clicking own tile cancels current attack
+    if (gridOwner[cellIdx] === myPidx) {
+      cancelAttack();
+      return;
+    }
 
-    startFloodToCell(cellIdx);
+    // Start new attack (cancels any existing one)
+    startAttack(cellIdx);
   }
 }
 
@@ -1100,9 +1266,6 @@ function featureAt(cx, cy) {
 // ══════════════════════════════════════════════
 //  SLIDER HANDLERS
 // ══════════════════════════════════════════════
-function clearTarget() {}
-function launchAttack() { cancelFlood(); }
-
 function onWorkerSlider(val) {
   workerRatio = val / 100;
   document.getElementById('worker-pct').textContent = val + '%';
@@ -1363,10 +1526,6 @@ function handleMsg(msg) {
       }
       break;
 
-    // ── Receive pixel-level tile claims from other players ──────────────────
-    // msg.from is injected by the server's default broadcastExcept relay.
-    // We skip our own messages (already applied locally) and apply each
-    // tile index directly to gridOwner so the map updates immediately.
     case 'tile_claim': {
       const ownerPid = msg.from;
       if (!ownerPid || ownerPid === myId) break;
