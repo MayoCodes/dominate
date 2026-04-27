@@ -602,6 +602,7 @@ function getPlayerIdx(pid) {
 // Robust RGB lookup — falls back to a deterministic color from the pidx index
 // so tiles NEVER render as the grey "unknown" fallback, even if players[] isn't
 // populated yet (e.g. opponent tiles arriving before playerList message).
+// FIXED — only caches when color is confirmed; always falls back to deterministic color
 function getPidxRgb(pidx) {
   if (pidxRgb[pidx]) return pidxRgb[pidx];
   const pid = idxPlayer[pidx];
@@ -609,8 +610,12 @@ function getPidxRgb(pidx) {
   if (pid && players[pid] && players[pid].color) {
     c = players[pid].color;
   } else {
-    // Fallback: deterministically pick a color from PLAYER_COLORS by pidx
+    // Fallback: deterministically pick a color — never cache this so it retries
+    // once the real player color arrives
     c = PLAYER_COLORS[(pidx - 1) % PLAYER_COLORS.length];
+    const rgb = [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
+    // Do NOT store in pidxRgb — return temporary value so next frame retries
+    return rgb;
   }
   pidxRgb[pidx] = [parseInt(c.slice(1,3),16), parseInt(c.slice(3,5),16), parseInt(c.slice(5,7),16)];
   return pidxRgb[pidx];
@@ -1420,18 +1425,21 @@ function handleMsg(msg) {
       break;
 
     case 'playerList':
-      msg.players.forEach((p, i) => {
-        if (!players[p.id]) {
-          players[p.id] = {
-            name: p.name, color: PLAYER_COLORS[i % PLAYER_COLORS.length],
-            dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
-          };
-          // Prime pidx + RGB cache for each player immediately
-          getPlayerIdx(p.id);
-          invalidatePidxRgb(p.id);
-        }
-      });
-      updateScoreboard(); updateHUD(); break;
+  msg.players.forEach((p, i) => {
+    const assignedColor = p.color || PLAYER_COLORS[i % PLAYER_COLORS.length];
+    if (!players[p.id]) {
+      players[p.id] = {
+        name: p.name, color: assignedColor,
+        dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+      };
+    } else {
+      // Update color in case placeholder was created before playerList arrived
+      players[p.id].color = assignedColor;
+    }
+    getPlayerIdx(p.id);
+    invalidatePidxRgb(p.id); // force re-cache with confirmed color
+  });
+  updateScoreboard(); updateHUD(); break;
 
     case 'playerJoined':
       if (!players[msg.player.id]) {
@@ -1530,29 +1538,28 @@ function handleMsg(msg) {
       }
       break;
 
-    case 'tile_claim': {
-      const ownerPid = msg.from;
-      if (!ownerPid || ownerPid === myId) break;
-      // Auto-create a placeholder if we haven't received playerList/playerJoined yet
-      if (!players[ownerPid]) {
-        const idx = Object.keys(players).length;
-        players[ownerPid] = {
-          name: 'Commander', color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
-          dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
-        };
-      }
-      getPlayerIdx(ownerPid);
-      invalidatePidxRgb(ownerPid);
-      for (const tileIdx of (msg.tiles || [])) {
-        if (tileIdx >= 0 && tileIdx < gridOwner.length && gridLand[tileIdx]) {
-          claimTile(tileIdx, ownerPid);
-        }
-      }
-      recomputeCentroid(ownerPid);
-      updateScoreboard();
-      checkVictory();
-      break;
+case 'tile_claim': {
+  const ownerPid = msg.from;
+  if (!ownerPid || ownerPid === myId) break;
+  if (!players[ownerPid]) {
+    const idx = Object.keys(players).length;
+    players[ownerPid] = {
+      name: 'Commander', color: PLAYER_COLORS[idx % PLAYER_COLORS.length],
+      dot: null, territories: new Set(), troops: 50, maxTroops: 1000, gold: 0,
+    };
+  }
+  getPlayerIdx(ownerPid);
+  invalidatePidxRgb(ownerPid); // ← must come AFTER players[ownerPid].color is set
+  for (const tileIdx of (msg.tiles || [])) {
+    if (tileIdx >= 0 && tileIdx < gridOwner.length && gridLand[tileIdx]) {
+      claimTile(tileIdx, ownerPid);
     }
+  }
+  recomputeCentroid(ownerPid);
+  updateScoreboard();
+  checkVictory();
+  break;
+}
 
     case 'territory_captured':
       captureTerritory(msg.territory, msg.attackerId, msg.defenderId);
