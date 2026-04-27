@@ -397,6 +397,9 @@ const canvas   = document.getElementById('game-canvas');
 const ctx      = canvas.getContext('2d');
 const mmCanvas = document.getElementById('minimap-canvas');
 const mmCtx    = mmCanvas.getContext('2d');
+// Add near the top with other state variables
+let mapReady = false;
+let pendingMessages = [];
 
 // ══════════════════════════════════════════════
 //  PARAMS
@@ -471,7 +474,13 @@ async function loadMap() {
   setLoad(85, 'Building adjacency…');
   buildAdjacency(world);
 
-  setLoad(100, 'Ready.');
+setLoad(100, 'Ready.');
+  mapReady = true;
+  // Flush any messages that arrived before the map was ready
+  for (const msg of pendingMessages) {
+    try { handleMsg(msg); } catch(err) { console.warn(err); }
+  }
+  pendingMessages = [];
   setTimeout(hideLoading, 350);
 }
 
@@ -1395,9 +1404,17 @@ function connectWS(code, username) {
   ws.addEventListener('open', () => {
     send({ type: 'join', username, color: myColor, isHost: false, settings: { map: mapKey } });
   });
-  ws.addEventListener('message', e => {
-    try { handleMsg(JSON.parse(e.data)); } catch(err) { console.warn(err); }
-  });
+    ws.addEventListener('message', e => {
+        try {
+        const msg = JSON.parse(e.data);
+        // Buffer spatial messages until gridLand is populated
+        if (!mapReady && (msg.type === 'dot_placed' || msg.type === 'tile_claim' || msg.type === 'territory_captured')) {
+            pendingMessages.push(msg);
+            return;
+        }
+        handleMsg(msg);
+        } catch(err) { console.warn(err); }
+    });
   ws.addEventListener('close', () => toast('Disconnected', 'error'));
   ws.addEventListener('error', () => toast('Connection error', 'error'));
 }
